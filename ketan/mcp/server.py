@@ -216,7 +216,7 @@ def ketan_rollback(checkpoint_id: str) -> str:
             f"Available recent checkpoints: {available}"
         )
     try:
-        h.shadow_fs.restore_snapshot(cp.fs_snapshot_id)
+        h.shadow_fs.rollback_to(cp.fs_snapshot_id)
         return (
             f"✅ Rolled back to checkpoint '{checkpoint_id}' (step {cp.step_number}).\n"
             f"🕰️  Workspace restored to exact state at that point in time."
@@ -300,7 +300,7 @@ def ketan_write_file_safe(filepath: str, content: str) -> str:
             f"💡 Rollback: ketan_rollback('{cp.checkpoint_id}')"
         )
     except Exception as e:
-        h.shadow_fs.restore_snapshot(cp.fs_snapshot_id)
+        h.shadow_fs.rollback_to(cp.fs_snapshot_id)
         return f"❌ Write failed — workspace auto-rolled back.\nError: {e}"
 
 
@@ -352,7 +352,7 @@ def ketan_run_bash_safe(command: str, timeout_seconds: int = 30) -> str:
         exit_code = result.returncode
 
         if exit_code != 0:
-            h.shadow_fs.restore_snapshot(cp.fs_snapshot_id)
+            h.shadow_fs.rollback_to(cp.fs_snapshot_id)
             return (
                 f"❌ Command failed (exit {exit_code}) — workspace auto-rolled back.\n"
                 f"Command: {command}\n"
@@ -371,13 +371,13 @@ def ketan_run_bash_safe(command: str, timeout_seconds: int = 30) -> str:
         )
 
     except subprocess.TimeoutExpired:
-        h.shadow_fs.restore_snapshot(cp.fs_snapshot_id)
+        h.shadow_fs.rollback_to(cp.fs_snapshot_id)
         return (
             f"❌ Command timed out after {timeout_seconds}s — workspace auto-rolled back.\n"
             f"Command: {command}"
         )
     except Exception as e:
-        h.shadow_fs.restore_snapshot(cp.fs_snapshot_id)
+        h.shadow_fs.rollback_to(cp.fs_snapshot_id)
         return f"❌ Command crashed — workspace auto-rolled back.\nError: {e}"
 
 
