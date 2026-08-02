@@ -352,6 +352,11 @@ def ketan_run_bash_safe(command: str, timeout_seconds: int = 30) -> str:
         exit_code = result.returncode
 
         if exit_code != 0:
+            h.causal_graph.add_failure_node(
+                step_number=h.current_step,
+                label=f"Bash command failed (exit {exit_code}): {command}",
+                error_message=stderr or stdout or f"Command exited with code {exit_code}",
+            )
             h.shadow_fs.rollback_to(cp.fs_snapshot_id)
             return (
                 f"❌ Command failed (exit {exit_code}) — workspace auto-rolled back.\n"
