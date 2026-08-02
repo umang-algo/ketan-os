@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ketan-os": {
+      "command": "ketan-mcp",
+      "args": [
+        "--workspace",
+        "/ABSOLUTE/PATH/TO/YOUR/PROJECT"
+      ]
+    }
+  }
+}
