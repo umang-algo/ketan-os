@@ -3,20 +3,18 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-73%20passed-brightgreen.svg)](tests/)
-[![MCP](https://img.shields.io/badge/Claude%20Code-MCP%20Ready-blueviolet.svg)](examples/claude_code_mcp/)
+[![Tests](https://img.shields.io/badge/tests-19%20passed-brightgreen.svg)](tests/)
+[![MCP](https://img.shields.io/badge/Claude%20Code-FastMCP%20Ready-blueviolet.svg)](ketan/mcp/server.py)
 
 ---
 
 ## 🔱 Origin & Philosophy
 
-> *"Aham ātmā guḍākeśa sarva-bhūtāśaya-sthitaḥ"*
-> — **Bhagavad Gita, Chapter 10, Verse 20**
->
-> *"I am the Self, O Gudakesha, seated in the hearts of all beings.
-> I am the beginning, the middle, and the end of all beings."*
+> *"Aham ātmā guḍākeśa sarva-bhūtāśaya-sthitaḥ"*  
+> — **Bhagavad Gita, Chapter 10, Verse 20**  
+>  
+> *"I am the Self, O Gudakesha, seated in the hearts of all beings.  
+> I am the beginning, the middle, and the end of all beings."*  
 
 **Ketan (केतन)** literally means *Banner, Beacon, or Dwelling* in Sanskrit — the fixed, unmovable point of reference from which all navigation begins. In the context of AI agents, Ketan-OS is that **beacon of ground truth**: the substrate that ensures an agent's environment, memory, and decisions are always anchored to verifiable, uncorrupted reality.
 
@@ -26,22 +24,15 @@ Modern AI agent frameworks (LangGraph, AutoGen, CrewAI, Claude Code) are powerfu
 
 ---
 
-## 🌟 Capability Comparison
+## 🌟 4 Core Substrate Pillars
 
-| Capability | LangGraph | AutoGen | CrewAI | **Ketan-OS 🪔** | **What Ketan-OS Does** |
-|:---|:---:|:---:|:---:|:---:|:---|
-| **Environment Filesystem Snapshotting** | ❌ | ❌ | ❌ | ✅ **Sub-Second ShadowFS** | Before every tool call, Ketan-OS takes an incremental, content-addressed snapshot of the entire workspace using `KetanShadowFS`. Stores unique file blobs by hash. Average snapshot time: **0.76ms for 1,000 files**. |
-| **Time-Travel Substrate Rollback** | ❌ | ❌ | ❌ | ✅ **Sub-Second Atomic** | On any failure — crash, invariant violation, syntax error, bad output — the workspace is reverted byte-for-byte to the last clean checkpoint in **1.21ms**. No partial writes, no corrupted state. The agent gets a counterfactual hint explaining what went wrong. |
-| **Pre-Flight Invariant Assertion Guards** | ❌ | ❌ | ❌ | ✅ **Multi-Layer Guard Engine** | Before a tool executes, Ketan-OS runs multi-layer guard rules: Python AST syntax validation, dangerous command detection (root/HOME wipes, raw disk writes, fork bombs, obfuscated pipes), path safety bounds, and custom rules. Tool is **blocked before execution** if any rule fails. |
-| **Live Causal Execution Trace Graph (CTG)** | ❌ | ❌ | ❌ | ✅ **Live DAG Lineage** | Every tool call, checkpoint, failure, and rollback is recorded as a node in a directed acyclic graph (DAG). The CTG tracks causal edges — which action led to which outcome. On failure, Ketan-OS traverses the DAG backwards to generate a **root cause explanation** automatically. |
-| **Epistemic Belief Engine & Memory Pruner** | ❌ | ❌ | ❌ | ✅ **Contradiction-Aware** | Tracks explicit factual beliefs the agent holds about the workspace (e.g., "file X is valid Python"). When a new observation contradicts a prior belief, semantic type coercion evaluates the change, invalidates the stale belief, and auto-prunes contradicted prompt assumptions to prevent hallucination loops. |
-| **eBPF-Style Symbolic Invariant Kernel** | ❌ | ❌ | ❌ | ✅ **Micro-Patching** | An in-process rule engine that evaluates temporal logic constraints on tool arguments in **sub-millisecond time** — inspired by Linux eBPF probes. Instead of just blocking, it can also **micro-patch** tool args in-flight (e.g., clamp an out-of-range financial amount to a safe value instead of rejecting it). |
-| **Predictive Speculative Task Kernel** | ❌ | ❌ | ❌ | ✅ **< 5ms Commit** | Runs multiple potential tool execution branches in parallel speculatively — like CPU branch prediction, but for AI workflows. The kernel selects and commits the best-outcome branch in < 5ms, discarding the rest. Reduces latency for long tool chains. |
-| **Scope-Locked Policy Engine (RBAC)** | ❌ | ❌ | ❌ | ✅ **Declarative RBAC** | Declarative role-based access control for tools. Define which agent roles can call which tools, which file paths they can write to, and what argument ranges are allowed. Policies are enforced at the substrate level — the agent cannot bypass them. |
-| **JIT Skill Trajectory Compilation** | ❌ | ❌ | ❌ | ✅ **Value-Sensitive Caching** | Compiles repeated agent skill sequences into cached, zero-token executors with parameter value matching. If an agent runs a repetitive tool sequence, future executions run from a compiled cache with 0 LLM tokens consumed. |
-| **Persona State Freeze, Fork & Diff** | ❌ | ❌ | ❌ | ✅ **Portable State** | Freeze the complete agent state (workspace + memory + conversation), fork it into parallel experiment branches, then diff what changed between branches. Enables A/B testing of agent strategies without any state contamination. |
-| **Claude Code MCP Integration** | ❌ | ❌ | ❌ | ✅ **FastMCP v2 Ready** | Ships a full Model Context Protocol (MCP) server. Connect Ketan-OS to Claude Code in one config line — Claude gets native tools for safe writes, bash with auto-rollback, CTG visualization, belief tracking, and more. |
-
+| Core Pillar | Component | Performance | What Ketan-OS Does |
+|:---|:---|:---:|:---|
+| **1. Sub-Second Transactional ShadowFS** | `KetanShadowFS` | **0.75 ms** (1k files) | Takes incremental, content-addressed snapshots of the workspace using SHA-256 blob deduplication (`blobs/<sha256>`). Stores unique file contents once. |
+| **2. Atomic Time-Travel Rollback** | `KetanHarness` & `KetanLedger` | **1.00 ms** rollback | On any crash, exception, syntax error, or assertion failure, the workspace is reverted byte-for-byte to the last clean checkpoint. Zero state leaks across 100+ crashes. |
+| **3. Multi-Layer Pre-Flight Guards** | `InvariantVerifier` | Sub-millisecond | Evaluates Python AST syntax before file writes hit disk and inspects shell commands for destructive patterns (`rm -rf /`, `rm -rf $HOME`, device wipes, fork bombs, obfuscated pipes). |
+| **4. Live Causal Execution Trace Graph** | `KetanTraceGraph` | Live DAG Lineage | Records every tool call, checkpoint, failure, and rollback into a directed acyclic graph (DAG). On failure, automatically traverses the DAG backwards to explain the root cause. |
+| **Epistemic Belief Engine** | `EpistemicBeliefEngine` | **0.011 ms** inspection | Tracks factual beliefs about workspace state. Uses type coercion (`_values_are_equivalent`) to prevent false positives and auto-prunes contradicted prompt assumptions. |
 
 ---
 
@@ -52,9 +43,8 @@ graph TD
     subgraph AgentLayer [" 🤖 Agent Execution Layer "]
         LLM["LLM Agent Loop
         OpenAI • Claude • LangGraph • AutoGen"]
-        MCP["🔌 MCP Server
-        Claude Code Integration
-        15 Native Tools"]
+        MCP["🔌 FastMCP Server
+        Claude Code Integration"]
         Wrapper["🛡️ KetanAgentWrapper
         Tool Call Interceptor"]
         LLM -->|Tool Call| Wrapper
@@ -67,31 +57,21 @@ graph TD
 
         subgraph PreFlight [" Pre-Flight Guard Layer "]
             Verifier["🛡️ InvariantVerifier
-            AST + Rule Engine"]
-            Policy["🔐 PolicyEngine
-            RBAC Scope Lock"]
-            Symbolic["⚡ SymbolicInvariantKernel
-            eBPF-Style Micro-Patching"]
-            Verifier --> Policy --> Symbolic
-        end
-
-        subgraph Speculative [" Speculative Execution "]
-            SpecKernel["🔮 PredictiveSpeculativeKernel
-            Branch Prediction < 5ms"]
+            AST Syntax + Dangerous Command Guards"]
         end
 
         subgraph StorageLedger [" Dual-Ledger Substrate "]
             Ledger["📋 KetanLedger
             Checkpoint Registry"]
             ShadowFS["💾 KetanShadowFS
-            Incremental Snapshot
-            8ms / 1000 files"]
+            Content-Addressed Snapshot
+            0.75ms / 1,000 files"]
             Ledger --> ShadowFS
         end
 
         subgraph Cognition [" Epistemic & Belief Layer "]
             Epistemic["🧠 EpistemicBeliefEngine
-            Contradiction Detection
+            Contradiction Inspection (0.011ms)
             Prompt Auto-Pruning"]
         end
 
@@ -105,7 +85,7 @@ graph TD
 
         subgraph TimeTravel [" Time-Travel Rollback "]
             Rollback["⏱️ Rollback Controller
-            Sub-Second Reversion"]
+            1.00ms Reversion"]
             Counterfactual["💡 Counterfactual Engine
             Diagnostic Hint Injector"]
             Rollback --> Counterfactual
@@ -114,19 +94,19 @@ graph TD
 
     Wrapper -->|"① Intercept"| Harness
     Harness -->|"② Pre-flight"| Verifier
-    Symbolic -->|"③ Pass / Micro-Patch"| Epistemic
+    Verifier -->|"③ Pre-Flight Pass"| Epistemic
     Epistemic -->|"④ Checkpoint"| ShadowFS
     ShadowFS -->|"⑤ Execute"| Execution["⚙️ Tool Execution"]
 
-    Symbolic -.->|Fail → Block| Rollback
-    Execution -->|Crash / Error| Rollback
+    Verifier -.->|Syntax / Safety Fail| Rollback
+    Execution -->|Crash / Exception| Rollback
 
     Execution -->|Success| Commit["🟢 Commit & Record"]
     Commit --> CTG
     Commit --> Ledger
 
-    Rollback -->|"⑥ Revert FS"| ShadowFS
-    Rollback -->|"⑦ Record Failure"| CTG
+    Rollback -->|"⑥ Revert FS (1.00ms)"| ShadowFS
+    Rollback -->|"⑦ Record Failure Node"| CTG
     Counterfactual -->|"⑧ Inject Hint"| LLM
 
     classDef agent    fill:#f3e8ff,stroke:#7c3aed,stroke-width:2px,color:#1e1b4b
@@ -137,7 +117,7 @@ graph TD
     classDef exec     fill:#f0fdf4,stroke:#16a34a,stroke-width:2px,color:#14532d
 
     class LLM,Wrapper,MCP agent
-    class Harness,Verifier,Policy,Symbolic,Epistemic,SpecKernel core
+    class Harness,Verifier,Epistemic core
     class Ledger,ShadowFS storage
     class Rollback,Counterfactual rollback
     class CTG,RCA ctg
@@ -176,16 +156,16 @@ print(result)
 
 ---
 
-## 🔌 Claude Code MCP Integration
+## 🔌 Claude Code FastMCP Integration
 
-Ketan-OS ships a ready-to-use **MCP server** that gives Claude Code 15 native tools for safe, transactional, auditable agentic coding.
+Ketan-OS ships a ready-to-use **FastMCP server** that gives Claude Code native tools for safe, transactional, auditable agentic coding.
 
 ### 1. Install
 
 ```bash
-git clone https://github.com/your-username/ketan-os.git
+git clone https://github.com/umang-algo/ketan-os.git
 cd ketan-os
-pip install ".[mcp]"
+uv pip install -e .
 ```
 
 ### 2. Configure Claude Code
@@ -196,24 +176,14 @@ Add to `~/.claude/claude.json`:
 {
   "mcpServers": {
     "ketan-os": {
-      "command": "ketan-mcp",
-      "args": ["--workspace", "/absolute/path/to/your/project"]
+      "command": "python",
+      "args": ["-m", "ketan.mcp.server", "--workspace", "/absolute/path/to/your/project"]
     }
   }
 }
 ```
 
-> **That's it.** After `pip install ".[mcp]"`, the `ketan-mcp` command is on your PATH. No `--directory` flags, no absolute repo paths needed.
-
-### 3. Start Claude Code
-
-```bash
-claude
-```
-
-Claude Code will auto-discover and start the Ketan-OS MCP server. You'll see `ketan-os` in the available tools.
-
-### Available MCP Tools
+### 3. Available MCP Tools
 
 | Tool | What it does |
 |---|---|
@@ -221,11 +191,11 @@ Claude Code will auto-discover and start the Ketan-OS MCP server. You'll see `ke
 | `ketan_snapshot` | Take atomic workspace snapshot → get rollback point |
 | `ketan_rollback` | Time-travel revert to any checkpoint |
 | `ketan_get_checkpoints` | List all restore points |
-| `ketan_write_file_safe` | Write file with pre-flight guards + auto rollback |
+| `ketan_write_file_safe` | Write file with pre-flight AST guards + auto rollback |
 | `ketan_run_bash_safe` | Run shell command with snapshot + auto rollback |
 | `ketan_check_invariant` | Dry-run invariant check (no execution) |
 | `ketan_get_ctg` | Causal Trace Graph as Mermaid diagram |
-| `ketan_explain_failure` | Root cause of the last failure |
+| `ketan_explain_failure` | Root cause explanation of the last failure |
 | `ketan_observe_belief` | Record a workspace fact into Epistemic Engine |
 | `ketan_list_beliefs` | See all tracked beliefs |
 | `ketan_read_file` | Read file + record as belief |
@@ -240,28 +210,28 @@ Claude Code will auto-discover and start the Ketan-OS MCP server. You'll see `ke
 | Module | Class | What It Does |
 |---|---|---|
 | `ketan/core.py` | `KetanHarness` | Central thread-safe coordinator engine |
-| `ketan/shadow_fs.py` | `KetanShadowFS` | Incremental workspace snapshotting & rollback |
+| `ketan/shadow_fs.py` | `KetanShadowFS` | Incremental workspace snapshotting & rollback (0.75ms / 1k files) |
 | `ketan/dual_ledger.py` | `KetanLedger` | Checkpoint registry synchronizing FS + prompt state |
-| `ketan/verifier.py` | `InvariantVerifier` | Pre-flight AST syntax, safety, and custom rule checks |
-| `ketan/epistemic.py` | `EpistemicBeliefEngine` | Belief tracking, contradiction detection, prompt pruning |
-| `ketan/symbolic_kernel.py` | `SymbolicInvariantKernel` | eBPF-style sub-ms rule eval & in-flight arg micro-patching |
-| `ketan/speculative_kernel.py` | `PredictiveSpeculativeKernel` | Parallel branch speculative execution < 5ms commit |
+| `ketan/verifier.py` | `InvariantVerifier` | Pre-flight AST syntax & dangerous bash command guards |
 | `ketan/causal_graph.py` | `KetanTraceGraph` | Live execution DAG + root cause failure explanation |
-| `ketan/policy.py` | `PolicyEngine` | Declarative RBAC scope-lock for tool calls |
-| `ketan/jit_compiler.py` | `JITCompiler` | Zero-token cached skill trajectory compiler |
-| `ketan/persona.py` | `PersonaManager` | Agent state freeze, fork & diff |
+| `ketan/epistemic.py` | `EpistemicBeliefEngine` | Belief tracking, contradiction detection, prompt pruning |
 | `ketan/adapters/` | `KetanAgentWrapper` | LangGraph + generic LLM adapter middleware |
-| `ketan/mcp/server.py` | MCP Server | 15 Claude Code MCP tools via stdio transport |
+| `ketan/mcp/server.py` | FastMCP Server | Safe, transactional MCP tools via stdio transport |
 
 ---
 
-## 🧪 Running Tests
+## 🧪 Running Tests & Benchmarks
 
 ```bash
-uv run python -m unittest discover tests
-# → Ran 67 tests in 0.18s OK
-# → [BENCHMARK] 50 Files Snapshot Time: ~8ms
-# → [BENCHMARK] 50 Files Rollback Time: ~4ms
+# Run unit test suite
+uv run pytest tests/
+# → 19 passed in 0.44s
+
+# Run empirical benchmark suite
+uv run python examples/benchmark_ketan_performance.py
+# → 1,000 Files Snapshot Latency: 0.74 ms
+# → Time-Travel Rollback Latency: 0.95 ms
+# → Data Integrity & Zero State Leak: 100% VERIFIED
 ```
 
 ---
