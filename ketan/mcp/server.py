@@ -220,7 +220,7 @@ def ketan_snapshot() -> str:
         f"✅ Snapshot created.\n"
         f"🆔 Checkpoint ID: {cp.checkpoint_id}\n"
         f"📍 Step: {cp.step_number}\n"
-        f"📁 Full workspace state captured atomically.\n"
+        f"📁 Tracked workspace state snapshot recorded.\n"
         f"💡 To revert: ketan_rollback('{cp.checkpoint_id}')"
     )
 
@@ -232,9 +232,9 @@ def ketan_snapshot() -> str:
 @mcp.tool()
 def ketan_rollback(checkpoint_id: str) -> str:
     """
-    Time-travel rollback the workspace to a previous checkpoint.
-    Reverts ALL filesystem changes (file writes, deletions, renames) that
-    occurred after that checkpoint was taken, in sub-second time.
+    Roll back the workspace to a previous checkpoint.
+    Reverts tracked filesystem changes (file writes, deletions, renames) that
+    occurred after that checkpoint was taken.
 
     Args:
         checkpoint_id: The checkpoint ID to roll back to (from ketan_get_checkpoints or ketan_snapshot).
@@ -251,8 +251,9 @@ def ketan_rollback(checkpoint_id: str) -> str:
         h.rollback_to(checkpoint_id)
         return (
             f"✅ Rolled back to checkpoint '{checkpoint_id}' (step {cp.step_number}).\n"
-            f"🕰️  Workspace restored to exact state at that point in time."
+            f"🕰️  Tracked workspace files restored to checkpoint state."
         )
+
     except Exception as e:
         return f"❌ Rollback failed: {e}"
 
@@ -550,19 +551,15 @@ def ketan_list_beliefs() -> str:
 @mcp.tool()
 def ketan_read_file(filepath: str) -> str:
     """
-    Read a file from the workspace. Also records its existence as a belief.
+    Read a file from the workspace via Ketan Sandbox Engine.
+    Also records its existence as a belief in the Epistemic Belief Engine.
 
     Args:
         filepath: Path relative to workspace root (e.g., "src/main.py")
     """
     h = _get_harness()
-    abs_path = Path(h.workspace_dir) / filepath
-    if not abs_path.exists():
-        return f"❌ File not found: {filepath}"
-    if not abs_path.is_file():
-        return f"❌ Path is not a file: {filepath}"
     try:
-        content = abs_path.read_text(encoding="utf-8")
+        content = h.sandbox.read_file(filepath)
         h.epistemic_engine.observe_raw(subject=filepath, predicate="exists", value="true")
         return content
     except Exception as e:
@@ -576,25 +573,22 @@ def ketan_read_file(filepath: str) -> str:
 @mcp.tool()
 def ketan_list_files(subdirectory: str = "") -> str:
     """
-    List all files in the workspace (or a subdirectory of it).
+    List all tracked workspace files via Ketan ShadowFS Engine.
 
     Args:
         subdirectory: Optional subdirectory relative to workspace root (default: root)
     """
     h = _get_harness()
-    base = Path(h.workspace_dir) / subdirectory
-    if not base.exists():
-        return f"❌ Directory not found: {subdirectory}"
+    states = h.shadow_fs.scan_state()
     files = []
-    for root, dirs, filenames in os.walk(base):
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ("__pycache__", ".venv", "node_modules")]
-        for f in sorted(filenames):
-            if f.endswith(".pyc"):
-                continue
-            abs_p = Path(root) / f
-            rel_p = str(abs_p.relative_to(Path(h.workspace_dir)))
-            files.append({"path": rel_p, "size_bytes": abs_p.stat().st_size})
+    prefix = subdirectory.strip("/") + "/" if subdirectory.strip("/") else ""
+    
+    for rel_p, st in states.items():
+        if not prefix or rel_p.startswith(prefix):
+            files.append({"path": rel_p, "size_bytes": st.size})
+            
     return json.dumps({"files": sorted(files, key=lambda x: x["path"]), "total": len(files)}, indent=2)
+
 
 
 # ---------------------------------------------------------------------------

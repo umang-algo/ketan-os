@@ -6,6 +6,7 @@ Tests true crash durability across process restarts:
 2. Abruptly kill/del Harness 1 (simulating process termination / SIGKILL).
 3. Instantiate Harness 2 in new process context.
 4. Run h2.recover_pending_transactions() and verify workspace state restoration.
+5. Verify KetanLedger reloads historical checkpoints and effects across process restarts.
 """
 
 import unittest
@@ -51,6 +52,22 @@ class TestProcessCrashDurability(unittest.TestCase):
         restored_content = (self.workspace / "main.py").read_text()
         self.assertEqual(restored_content, "def run(): return 42\n")
 
+        h2.cleanup()
+
+    def test_ledger_reloads_checkpoints_across_process_restarts(self):
+        h1 = KetanHarness(str(self.workspace))
+        cp1 = h1.create_checkpoint(
+            prompt_stack=[{"role": "user", "content": "Hello"}],
+            tool_calls=[{"name": "write_file", "args": {"path": "test.txt"}}]
+        )
+        ws_dir = h1.workspace_dir
+        del h1
+
+        h2 = KetanHarness(ws_dir)
+        reloaded_cp = h2.ledger.get_checkpoint(cp1.checkpoint_id)
+        self.assertIsNotNone(reloaded_cp)
+        self.assertEqual(reloaded_cp.checkpoint_id, cp1.checkpoint_id)
+        self.assertEqual(reloaded_cp.step_number, cp1.step_number)
         h2.cleanup()
 
 

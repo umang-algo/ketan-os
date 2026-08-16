@@ -1,7 +1,9 @@
+import os
+import json
 import time
 import hashlib
-import json
 import threading
+from pathlib import Path
 from enum import Enum
 from typing import List, Dict, Any, Optional
 
@@ -40,6 +42,16 @@ class Effect:
             "timestamp": self.timestamp
         }
 
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Effect":
+        return cls(
+            effect_id=d["effect_id"],
+            system=d["system"],
+            target=d["target"],
+            reversibility=ReversibilityKind(d.get("reversibility", "REVERSIBLE")),
+            metadata=d.get("metadata", {})
+        )
+
 
 class ExecutionTurn:
     """Represents a single execution step/turn in Ketan-OS."""
@@ -70,12 +82,27 @@ class ExecutionTurn:
             "turn_id": self.turn_id,
             "step_number": self.step_number,
             "messages_count": len(self.prompt_snapshot),
+            "prompt_snapshot": self.prompt_snapshot,
             "tool_calls": self.tool_calls,
             "effects": [e.to_dict() for e in self.effects],
             "reversibility": self.reversibility.value,
             "metadata": self.metadata,
             "timestamp": self.timestamp
         }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "ExecutionTurn":
+        effects = [Effect.from_dict(e) for e in d.get("effects", [])]
+        turn = cls(
+            turn_id=d["turn_id"],
+            step_number=d["step_number"],
+            prompt_snapshot=d.get("prompt_snapshot", []),
+            tool_calls=d.get("tool_calls", []),
+            effects=effects,
+            metadata=d.get("metadata", {}),
+            reversibility=ReversibilityKind(d.get("reversibility", "REVERSIBLE"))
+        )
+        return turn
 
 
 class Checkpoint:
@@ -87,29 +114,64 @@ class Checkpoint:
         turn: ExecutionTurn,
         fs_snapshot_id: str,
         parent_root_hash: str = "GENESIS",
-        state_data: Optional[Dict[str, Any]] = None
+        state_data: Optional[Dict[str, Any]] = None,
+        expected_fs_root_hash: Optional[str] = None
     ):
         self.checkpoint_id = checkpoint_id
         self.step_number = step_number
         self.turn = turn
         self.fs_snapshot_id = fs_snapshot_id
         self.parent_root_hash = parent_root_hash
+        self.expected_fs_root_hash = expected_fs_root_hash or ""
         self.state_data = state_data or {}
         self.created_at = time.time()
         self.state_root_hash = self.compute_state_root_hash(parent_root_hash)
 
     def compute_state_root_hash(self, parent_hash: str = "GENESIS") -> str:
-        """Computes a cryptographically hash-chained state root for this checkpoint."""
+        """Computes a Merkle-style cryptographically hash-chained state root for this checkpoint."""
         hasher = hashlib.sha256()
         hasher.update(parent_hash.encode("utf-8"))
         hasher.update(self.checkpoint_id.encode("utf-8"))
         hasher.update(self.fs_snapshot_id.encode("utf-8"))
         hasher.update(str(self.step_number).encode("utf-8"))
+        hasher.update(self.expected_fs_root_hash.encode("utf-8"))
         
         prompt_content = json.dumps(self.turn.prompt_snapshot, sort_keys=True)
         hasher.update(prompt_content.encode("utf-8"))
+
+        effects_content = json.dumps([e.to_dict() for e in self.turn.effects], sort_keys=True)
+        hasher.update(effects_content.encode("utf-8"))
         
         return hasher.hexdigest()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "checkpoint_id": self.checkpoint_id,
+            "step_number": self.step_number,
+            "turn": self.turn.to_dict(),
+            "fs_snapshot_id": self.fs_snapshot_id,
+            "parent_root_hash": self.parent_root_hash,
+            "expected_fs_root_hash": self.expected_fs_root_hash,
+            "state_root_hash": self.state_root_hash,
+            "state_data": self.state_data,
+            "created_at": self.created_at
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Checkpoint":
+        turn = ExecutionTurn.from_dict(d["turn"])
+        cp = cls(
+            checkpoint_id=d["checkpoint_id"],
+            step_number=d["step_number"],
+            turn=turn,
+            fs_snapshot_id=d["fs_snapshot_id"],
+            parent_root_hash=d.get("parent_root_hash", "GENESIS"),
+            state_data=d.get("state_data", {}),
+            expected_fs_root_hash=d.get("expected_fs_root_hash", "")
+        )
+        cp.state_root_hash = d.get("state_root_hash", cp.state_root_hash)
+        cp.created_at = d.get("created_at", cp.created_at)
+        return cp
 
     def __repr__(self):
         return f"<Checkpoint id='{self.checkpoint_id}' step={self.step_number} hash={self.state_root_hash[:8]}>"
@@ -121,12 +183,49 @@ class KetanLedger:
     - Ledger A: Environment state & filesystem snapshots
     - Ledger B: LLM conversation prompt stack & turn records
     
+    Persists checkpoints to workspace_root/.ketan/ledger.jsonl for multi-process restart durability.
     Thread-safe synchronization using internal RLock.
     """
-    def __init__(self):
+    def __init__(self, workspace_root: Optional[str] = None):
+        self.workspace_root = Path(workspace_root).resolve() if workspace_root else None
         self.checkpoints: Dict[str, Checkpoint] = {}
         self.history: List[Checkpoint] = []
         self._lock = threading.RLock()
+
+        if self.workspace_root:
+            self.ketan_dir = self.workspace_root / ".ketan"
+            self.ketan_dir.mkdir(parents=True, exist_ok=True)
+            self.ledger_file = self.ketan_dir / "ledger.jsonl"
+            self._load_from_disk()
+
+    def _load_from_disk(self):
+        """Reloads checkpoint history from .ketan/ledger.jsonl on process startup."""
+        with self._lock:
+            if not hasattr(self, "ledger_file") or not self.ledger_file.exists():
+                return
+            with open(self.ledger_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line_str = line.strip()
+                    if not line_str:
+                        continue
+                    try:
+                        data = json.loads(line_str)
+                        cp = Checkpoint.from_dict(data)
+                        self.checkpoints[cp.checkpoint_id] = cp
+                        self.history.append(cp)
+                    except Exception:
+                        continue
+
+    def _flush_to_disk(self):
+        """Rewrites ledger.jsonl to match current history."""
+        with self._lock:
+            if not hasattr(self, "ledger_file"):
+                return
+            lines = [json.dumps(cp.to_dict()) + "\n" for cp in self.history]
+            with open(self.ledger_file, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+                f.flush()
+                os.fsync(f.fileno())
 
     def record_checkpoint(
         self,
@@ -135,7 +234,8 @@ class KetanLedger:
         prompt_stack: List[Dict[str, Any]],
         fs_snapshot_id: str,
         tool_calls: Optional[List[Dict[str, Any]]] = None,
-        custom_state: Optional[Dict[str, Any]] = None
+        custom_state: Optional[Dict[str, Any]] = None,
+        expected_fs_root_hash: Optional[str] = None
     ) -> Checkpoint:
         """Records a synchronized checkpoint across both ledgers with hash-chained state root."""
         with self._lock:
@@ -153,15 +253,19 @@ class KetanLedger:
                 turn=turn,
                 fs_snapshot_id=fs_snapshot_id,
                 parent_root_hash=parent_hash,
-                state_data=custom_state
+                state_data=custom_state,
+                expected_fs_root_hash=expected_fs_root_hash
             )
             
             self.checkpoints[checkpoint_id] = cp
             self.history.append(cp)
+            self._flush_to_disk()
             return cp
 
     def get_checkpoint(self, checkpoint_id: str) -> Optional[Checkpoint]:
         with self._lock:
+            if checkpoint_id not in self.checkpoints:
+                self._load_from_disk()
             return self.checkpoints.get(checkpoint_id)
 
     def truncate_to(self, checkpoint_id: str) -> List[Checkpoint]:
@@ -170,6 +274,9 @@ class KetanLedger:
         Returns the list of pruned checkpoints.
         """
         with self._lock:
+            if checkpoint_id not in self.checkpoints:
+                self._load_from_disk()
+                
             if checkpoint_id not in self.checkpoints:
                 raise KeyError(f"Checkpoint '{checkpoint_id}' not found in KetanLedger.")
                 
@@ -188,6 +295,7 @@ class KetanLedger:
             for cp in pruned:
                 self.checkpoints.pop(cp.checkpoint_id, None)
                 
+            self._flush_to_disk()
             return pruned
 
     def latest_checkpoint(self) -> Optional[Checkpoint]:

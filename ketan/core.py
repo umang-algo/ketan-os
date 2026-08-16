@@ -48,7 +48,7 @@ class KetanHarness:
     ):
         self.workspace_dir = workspace_dir
         self.shadow_fs = KetanShadowFS(workspace_dir, ignore_patterns=ignore_patterns)
-        self.ledger = KetanLedger()
+        self.ledger = KetanLedger(workspace_dir)
         self.verifier = InvariantVerifier()
         self.causal_graph = KetanTraceGraph()
         self.epistemic_engine = EpistemicBeliefEngine()
@@ -64,7 +64,7 @@ class KetanHarness:
 
         self.max_rollback_attempts = max_rollback_attempts
         self.rollback_counts: Dict[str, int] = {}
-        self.current_step = 0
+        self.current_step = len(self.ledger.history)
         self._last_ctg_node: Optional[CausalNode] = None
         self._lock = threading.RLock()
 
@@ -91,7 +91,7 @@ class KetanHarness:
     ) -> Checkpoint:
         """
         Creates a synchronized checkpoint across ledgers & WAL Journal:
-        1. Takes incremental workspace snapshot.
+        1. Takes incremental workspace snapshot and computes Merkle FS root hash.
         2. Writes TX_BEGIN record to persistent journal log (.ketan/journal.jsonl).
         3. Computes hash-chained cryptographic state root and records checkpoint.
         """
@@ -100,6 +100,7 @@ class KetanHarness:
             checkpoint_id = f"cp_step_{self.current_step}_{int(time.time() * 1000)}"
 
             fs_snapshot = self.shadow_fs.create_snapshot(checkpoint_id)
+            fs_root_hash = self.shadow_fs.compute_current_fs_root_hash()
 
             cp = self.ledger.record_checkpoint(
                 checkpoint_id=checkpoint_id,
@@ -107,7 +108,8 @@ class KetanHarness:
                 prompt_stack=prompt_stack,
                 fs_snapshot_id=fs_snapshot.snapshot_id,
                 tool_calls=tool_calls,
-                custom_state=custom_state
+                custom_state=custom_state,
+                expected_fs_root_hash=fs_root_hash
             )
             cp.turn.reversibility = reversibility
 
@@ -272,7 +274,7 @@ class KetanHarness:
         """
         Performs transaction recovery:
         1. Reverts workspace filesystem to target_checkpoint_id snapshot.
-        2. Recomputes actual workspace filesystem state root hash.
+        2. Recomputes actual workspace filesystem state root hash and verifies match.
         3. Executes registered compensation actions for COMPENSATABLE operations.
         4. Flags IRREVERSIBLE side effects.
         5. Writes TX_ROLLBACK event to WAL journal.
@@ -281,7 +283,7 @@ class KetanHarness:
         with self._lock:
             cp = self.ledger.get_checkpoint(target_checkpoint_id)
             if not cp:
-                raise KeyError(f"Target checkpoint '{target_checkpoint_id}' not found.")
+                raise KeyError(f"Target checkpoint '{target_checkpoint_id}' not found in KetanLedger.")
 
             attempts = self.rollback_counts.get(target_checkpoint_id, 0) + 1
             self.rollback_counts[target_checkpoint_id] = attempts
@@ -311,7 +313,12 @@ class KetanHarness:
 
             # Actual Post-Rollback State Root Recomputation & Verification
             actual_fs_hash = self.shadow_fs.compute_current_fs_root_hash()
-            logger.info(f"[Ketan-OS State Root Verification] Restored Actual FS Root: {actual_fs_hash[:8]} | Checkpoint Root: {cp.state_root_hash[:8]}")
+            if cp.expected_fs_root_hash and actual_fs_hash != cp.expected_fs_root_hash:
+                raise RollbackVerificationError(
+                    f"Rollback Verification Failed! Expected workspace FS hash '{cp.expected_fs_root_hash[:8]}', "
+                    f"but actual post-restoration FS hash was '{actual_fs_hash[:8]}'."
+                )
+            logger.info(f"[Ketan-OS State Root Verification] Verified Merkle State Root Match: {actual_fs_hash[:8]}")
 
             # Phase 2: Truncate Ledger & Execute Compensation Actions
             pruned_cps = self.ledger.truncate_to(target_checkpoint_id)
@@ -411,24 +418,23 @@ class KetanHarness:
                 logger.info(f"[Ketan-OS Crash Recovery] Recovering crashed uncommitted transaction '{tx_id}'")
                 self.journal.record_event(tx_id=tx_id, state=TransactionState.RECOVERING, step=self.current_step)
 
-                # Revert workspace to persistent shadow_fs snapshot tx_id
-                if tx_id in self.shadow_fs.snapshots:
-                    try:
-                        self.shadow_fs.rollback_to(tx_id)
-                        logger.info(f"[Ketan-OS Crash Recovery] Successfully restored workspace files to '{tx_id}'")
-                    except Exception as ex:
-                        logger.error(f"[Ketan-OS Crash Recovery] Error restoring snapshot '{tx_id}': {str(ex)}")
-                elif self.ledger.get_checkpoint(tx_id):
+                cp = self.ledger.get_checkpoint(tx_id)
+                if cp:
                     try:
                         self.rollback(tx_id, reason="Automated Startup Crash Recovery", counterfactual_hint="Crashed transaction recovered")
                     except Exception as ex:
                         logger.error(f"[Ketan-OS Crash Recovery] Error recovering '{tx_id}': {str(ex)}")
+                elif tx_id in self.shadow_fs.snapshots:
+                    try:
+                        self.shadow_fs.rollback_to(tx_id)
+                        logger.info(f"[Ketan-OS Crash Recovery] Restored workspace files to persistent snapshot '{tx_id}'")
+                    except Exception as ex:
+                        logger.error(f"[Ketan-OS Crash Recovery] Error restoring snapshot '{tx_id}': {str(ex)}")
 
                 self.journal.record_event(tx_id=tx_id, state=TransactionState.RECOVERED, step=self.current_step)
                 recovered.append(tx_id)
 
             return recovered
-
 
     def cleanup(self):
         """Clean up temporary resources."""
