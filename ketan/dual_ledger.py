@@ -26,27 +26,52 @@ class ReversibilityKind(str, Enum):
 
 
 class Effect:
-    """Represents an explicit side-effect caused by a tool execution in Ketan-OS."""
+    """
+    Represents an explicit side-effect caused by a tool execution in Ketan-OS.
+    Captures preconditions (before state), postconditions (after state), inverse operations,
+    and postcondition conflict detection.
+    """
     def __init__(
         self,
         effect_id: str,
         system: str,          # "filesystem", "git", "database", "github", "network"
         target: str,          # "src/main.py", "orders_table", "user@test.com"
+        action: str = "mutation", # "write_file", "git_commit", "sql_insert"
+        precondition: Optional[Dict[str, Any]] = None,  # State before action
+        postcondition: Optional[Dict[str, Any]] = None, # Expected state after action
+        inverse: Optional[Dict[str, Any]] = None,       # Inverse compensating action
         reversibility: ReversibilityKind = ReversibilityKind.REVERSIBLE,
         metadata: Optional[Dict[str, Any]] = None
     ):
         self.effect_id = effect_id
         self.system = system
         self.target = target
+        self.action = action
+        self.precondition = precondition or {}
+        self.postcondition = postcondition or {}
+        self.inverse = inverse or {}
         self.reversibility = reversibility
         self.metadata = metadata or {}
         self.timestamp = time.time()
+
+    def verify_postcondition(self, current_state: Dict[str, Any]) -> bool:
+        """Verifies if actual current state matches recorded postcondition before compensation."""
+        if not self.postcondition:
+            return True
+        for key, expected_val in self.postcondition.items():
+            if current_state.get(key) != expected_val:
+                return False
+        return True
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "effect_id": self.effect_id,
             "system": self.system,
             "target": self.target,
+            "action": self.action,
+            "precondition": self.precondition,
+            "postcondition": self.postcondition,
+            "inverse": self.inverse,
             "reversibility": self.reversibility.value,
             "metadata": self.metadata,
             "timestamp": self.timestamp
@@ -58,6 +83,10 @@ class Effect:
             effect_id=d["effect_id"],
             system=d["system"],
             target=d["target"],
+            action=d.get("action", "mutation"),
+            precondition=d.get("precondition", {}),
+            postcondition=d.get("postcondition", {}),
+            inverse=d.get("inverse", {}),
             reversibility=ReversibilityKind(d.get("reversibility", "REVERSIBLE")),
             metadata=d.get("metadata", {})
         )
@@ -118,7 +147,6 @@ class ExecutionTurn:
         if "timestamp" in d:
             turn.timestamp = d["timestamp"]
         return turn
-
 
 
 class Checkpoint:
@@ -302,7 +330,6 @@ class KetanLedger:
             self.history.append(cp)
             self._append_to_disk(cp)
             return cp
-
 
     def get_checkpoint(self, checkpoint_id: str) -> Optional[Checkpoint]:
         with self._lock:

@@ -3,11 +3,13 @@ Content-Addressed Persistent Workspace Snapshot Engine for Ketan-OS (केत�
 
 Tracks file tree state and enables deterministic workspace state rollback to any historical snapshot
 using content-addressed deduplicated blob storage stored persistently in workspace_root/.ketan/.
+Writes .ketan/snapshots/<snapshot_id>/manifest.json for deterministic snapshot state recovery.
 
 Thread-safe across processes.
 """
 
 import os
+import json
 import shutil
 import hashlib
 import time
@@ -44,7 +46,7 @@ class FileState:
 
 
 class ShadowSnapshot:
-    """A point-in-time content-addressed snapshot of the workspace."""
+    """A point-in-time content-addressed snapshot of the workspace with manifest metadata."""
     def __init__(self, snapshot_id: str, backup_dir: Path, file_states: Dict[str, FileState]):
         self.snapshot_id = snapshot_id
         self.backup_dir = backup_dir
@@ -73,7 +75,7 @@ class ShadowSnapshot:
 class KetanShadowFS:
     """
     Persistent Content-Addressed Workspace Snapshot Engine for Ketan-OS (केतन).
-    Stores snapshots and blobs in workspace_root/.ketan/ for crash durability.
+    Stores snapshots, manifests, and blobs in workspace_root/.ketan/ for crash durability.
     Thread-safe synchronization.
     """
     def __init__(self, target_dir: str, ignore_patterns: Optional[List[str]] = None, max_snapshots: int = 50):
@@ -98,13 +100,29 @@ class KetanShadowFS:
         self._load_existing_snapshots()
 
     def _load_existing_snapshots(self):
-        """Loads pre-existing snapshot metadata from disk for crash durability across process restarts."""
+        """Loads pre-existing snapshot metadata & manifest.json files from disk for crash durability."""
         with self._lock:
             if not self.snapshots_dir.exists():
                 return
             for snap_dir in self.snapshots_dir.iterdir():
                 if snap_dir.is_dir():
                     snapshot_id = snap_dir.name
+                    manifest_file = snap_dir / "manifest.json"
+                    if manifest_file.exists():
+                        try:
+                            with open(manifest_file, "r", encoding="utf-8") as mf:
+                                data = json.load(mf)
+                            states = {}
+                            for rel_p, st_d in data.get("file_states", {}).items():
+                                abs_p = self.target_dir / rel_p
+                                st = FileState(rel_p, abs_p)
+                                st.content_hash = st_d.get("content_hash")
+                                st.size = st_d.get("size", st.size)
+                                states[rel_p] = st
+                            self.snapshots[snapshot_id] = ShadowSnapshot(snapshot_id, snap_dir, states)
+                            continue
+                        except Exception:
+                            pass
                     states = self._scan_backup_dir(snap_dir)
                     self.snapshots[snapshot_id] = ShadowSnapshot(snapshot_id, snap_dir, states)
 
@@ -116,6 +134,8 @@ class KetanShadowFS:
         for root, dirs, files in os.walk(backup_dir):
             root_path = Path(root)
             for file in sorted(files):
+                if file == "manifest.json":
+                    continue
                 abs_path = root_path / file
                 try:
                     rel_path = str(abs_path.relative_to(backup_dir))
@@ -123,7 +143,6 @@ class KetanShadowFS:
                 except ValueError:
                     continue
         return states
-
 
     def is_ignored(self, path: Path) -> bool:
         """Checks if path or parent directory matches ignore patterns."""
@@ -133,7 +152,6 @@ class KetanShadowFS:
         return False
 
     def scan_state(self) -> Dict[str, FileState]:
-
         """Scans workspace directory recursively and returns map of relative paths to FileState."""
         with self._lock:
             states = {}
@@ -183,7 +201,7 @@ class KetanShadowFS:
     def create_snapshot(self, snapshot_id: str) -> ShadowSnapshot:
         """
         Takes an incremental, content-addressed snapshot of the workspace.
-        Stores blobs in .ketan/blobs/ and snapshot metadata in .ketan/snapshots/.
+        Stores blobs in .ketan/blobs/ and manifest.json metadata in .ketan/snapshots/<snapshot_id>/.
         """
         with self._lock:
             current_states = self.scan_state()
@@ -204,6 +222,27 @@ class KetanShadowFS:
                         except (OSError, AttributeError):
                             shutil.copy2(blob_path, dest)
                     
+            # Write durable manifest.json for snapshot
+            manifest = {
+                "snapshot_id": snapshot_id,
+                "created_at": time.time(),
+                "fs_root_hash": self.compute_current_fs_root_hash(),
+                "file_states": {
+                    rel_p: {
+                        "rel_path": st.rel_path,
+                        "content_hash": st.content_hash,
+                        "size": st.size,
+                        "mtime": st.mtime,
+                        "is_dir": st.is_dir,
+                        "is_symlink": st.is_symlink
+                    }
+                    for rel_p, st in current_states.items()
+                }
+            }
+            manifest_file = snap_backup_dir / "manifest.json"
+            with open(manifest_file, "w", encoding="utf-8") as mf:
+                json.dump(manifest, mf, indent=2)
+
             snapshot = ShadowSnapshot(snapshot_id, snap_backup_dir, current_states)
             self.snapshots[snapshot_id] = snapshot
             

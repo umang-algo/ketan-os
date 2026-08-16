@@ -62,6 +62,45 @@ Ketan-OS tracks tool operations across three distinct transaction recovery tiers
 
 ---
 
+## 📜 Formal Ketan-OS Transaction Protocol Specification
+
+Ketan-OS formally defines the execution boundary around agent actions across four authoritative layers:
+
+| Component Layer | Persistent Storage | Role & Guarantee |
+|:---|:---|:---|
+| **Write-Ahead Log (WAL)** | `.ketan/journal.jsonl` | **Authoritative Transaction State Log** — Synchronous `fsync()` record of all `BEGIN`, `EFFECT`, `COMMIT`, `ROLLBACK`, and `RECOVERED` events. |
+| **Dual-Ledger Index** | `.ketan/ledger.jsonl` | **Checkpoint Index & Turn History** — $O(1)$ append-only index mapping `state_root_hash`, prompt stacks, and tool call records across steps. |
+| **Workspace State Engine** | `.ketan/snapshots/<id>/manifest.json` + `.ketan/blobs/` | **Content-Addressed State Store** — Incremental workspace snapshots with JSON manifests and deduplicated file blobs. |
+| **Effect Contract Engine** | `Effect(pre, action, post, inverse)` | **Observable System Mutation Contract** — Captures preconditions, postconditions, and compensation conflict detection. |
+
+```text
+              AGENT TRANSACTION LIFECYCLE
+                         │
+                         ▼
+        ┌──────────────────────────────────┐
+        │  WAL Journal (.ketan/journal)   │
+        │  TX_BEGIN → TX_EFFECT → COMMIT   │
+        └────────────────┬─────────────────┘
+                         │
+        ┌────────────────┴─────────────────┐
+        │  Dual-Ledger (.ketan/ledger)    │
+        │  Hash-Chained State Commitment   │
+        └────────────────┬─────────────────┘
+                         │
+        ┌────────────────┴─────────────────┐
+        │  ShadowFS (.ketan/snapshots)    │
+        │  Manifest & Blob Storage         │
+        └────────────────┬─────────────────┘
+                         │
+        ┌────────────────┴─────────────────┐
+        │  Effect Contract Engine          │
+        │  Pre/Postcondition Verification  │
+        └──────────────────────────────────┘
+```
+
+---
+
+
 
 ## 🏗️ System Architecture
 
