@@ -3,7 +3,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-21%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-32%20passed-brightgreen.svg)](tests/)
 [![MCP](https://img.shields.io/badge/Claude%20Code-FastMCP%20Ready-blueviolet.svg)](ketan/mcp/server.py)
 [![ketan-os MCP server](https://glama.ai/mcp/servers/umang-algo/ketan-os/badges/score.svg)](https://glama.ai/mcp/servers/umang-algo/ketan-os)
 [![M8ven Score](https://m8ven.ai/badge/mcp/umang-algo-ketan-os-1k4rg0)](https://m8ven.ai/mcp/umang-algo-ketan-os-1k4rg0)
@@ -24,23 +24,27 @@ AI agents perform complex, multi-step actions across files, commands, and extern
 
 **Ketan-OS provides the transactional substrate for AI agents**:
 ```text
-BEGIN  →  CHECKPOINT  →  VERIFY  →  COMMIT / ROLLBACK / COMPENSATE
+BEGIN  →  WAL JOURNAL  →  VERIFY  →  SANDBOX EXEC  →  COMMIT / ROLLBACK / COMPENSATE
 ```
 
-By wrapping tool execution in content-addressed state snapshotting, canonical path isolation, pre-flight assertion guards, causal execution provenance, and prompt contradiction pruning, Ketan-OS makes agent tool execution safe, reversible, and debuggable.
+By wrapping tool execution in content-addressed state snapshotting, durable WAL journal persistence, container sandbox isolation, pre-flight assertion guards, causal execution provenance, and prompt contradiction pruning, Ketan-OS makes agent tool execution safe, reversible, and debuggable.
 
 ---
 
-## 🌟 4 Core Architectural Subsystems
+## 🌟 Core Architectural Subsystems
 
 | Subsystem | Component | What Ketan-OS Does |
 |:---|:---|:---|
 | **1. Transactional Workspace Recovery** | `KetanShadowFS` | Takes incremental, content-addressed workspace snapshots using SHA-256 blob deduplication (`blobs/<sha256>`). Reverts tracked regular workspace files to clean checkpoints. |
-| **2. Multi-Layer Pre-Flight Guards** | `InvariantVerifier` | Enforces strict workspace canonical path isolation (`is_relative_to(workspace_root)`), blocks symlink traversal escapes, checks Python AST syntax, and filters destructive shell patterns. |
-| **3. Causal Execution Provenance DAG** | `KetanTraceGraph` | Records tool calls, checkpoints, failures, and rollbacks into a directed acyclic graph (DAG). On failure, automatically traverses the DAG backwards to explain the execution lineage. |
-| **4. State Belief & Fact Store** | `EpistemicBeliefEngine` | Tracks factual assertions about workspace state. Uses type coercion (`_values_are_equivalent`) to prevent false positives and auto-prunes contradicted prompt assumptions. |
+| **2. Durable Write-Ahead Journal (WAL)** | `TransactionJournal` | Synchronously appends transaction events (`TX_BEGIN`, `TX_COMMIT`, `TX_ROLLBACK`) to `.ketan/journal.jsonl` on disk so transactions survive process crashes & SIGKILL. |
+| **3. Execution Sandbox Engines** | `LocalProcessSandbox` & `DockerContainerSandbox` | Provides isolated tool execution backends. Enforces strict canonical path confinement locally or runs commands in isolated Docker containers. |
+| **4. System Compensation Drivers** | `GitCompensationDriver` & `SQLCompensationDriver` | Executes registered inverse operations (`git revert`, inverse SQL `DELETE` queries) to compensate non-filesystem mutations during rollback. |
+| **5. Multi-Layer Pre-Flight Guards** | `InvariantVerifier` | Enforces strict workspace canonical path isolation (`is_relative_to(workspace_root)`), blocks symlink traversal escapes, checks Python AST syntax, and filters destructive shell patterns. |
+| **6. Causal Execution Provenance DAG** | `KetanTraceGraph` | Records tool calls, checkpoints, failures, and rollbacks into a directed acyclic graph (DAG). On failure, automatically traverses the DAG backwards to explain the execution lineage. |
+| **7. State Belief & Fact Store** | `EpistemicBeliefEngine` | Tracks factual assertions about workspace state. Uses type coercion (`_values_are_equivalent`) to prevent false positives and auto-prunes contradicted prompt assumptions. |
 
 ---
+
 
 ## 🛡️ Side-Effect Reversibility Matrix
 

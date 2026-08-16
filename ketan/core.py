@@ -8,6 +8,8 @@ from ketan.dual_ledger import KetanLedger, Checkpoint, ReversibilityKind
 from ketan.verifier import InvariantVerifier, InvariantResult
 from ketan.causal_graph import KetanTraceGraph, CausalNode, NodeKind, NodeStatus
 from ketan.epistemic import EpistemicBeliefEngine, ContradictionEvent
+from ketan.journal import TransactionJournal, TransactionState
+from ketan.sandboxes import BaseSandboxEngine, LocalProcessSandbox
 
 logger = logging.getLogger("KetanHarness")
 
@@ -26,8 +28,8 @@ class KetanHarness:
 
     The Transactional Runtime for AI Agents.
     Provides content-addressed state snapshotting, canonical path isolation,
-    pre-flight assertion verification, Epistemic belief graph tracking,
-    Causal Execution Provenance lineage, compensation action execution,
+    durable WAL journal persistence, sandbox isolation, pre-flight assertion verification,
+    Epistemic belief graph tracking, Causal Execution Provenance lineage, compensation action execution,
     and workspace state rollback.
 
     Thread-safe: protected by internal RLock.
@@ -36,7 +38,8 @@ class KetanHarness:
         self,
         workspace_dir: str,
         max_rollback_attempts: int = 3,
-        ignore_patterns: Optional[List[str]] = None
+        ignore_patterns: Optional[List[str]] = None,
+        sandbox_engine: Optional[BaseSandboxEngine] = None
     ):
         self.workspace_dir = workspace_dir
         self.shadow_fs = KetanShadowFS(workspace_dir, ignore_patterns=ignore_patterns)
@@ -45,6 +48,12 @@ class KetanHarness:
         self.causal_graph = KetanTraceGraph()
         self.epistemic_engine = EpistemicBeliefEngine()
         
+        # Durable Write-Ahead Transaction Journal (WAL)
+        self.journal = TransactionJournal(workspace_dir)
+        
+        # Execution Sandbox Engine (Local workspace or Docker container)
+        self.sandbox: BaseSandboxEngine = sandbox_engine or LocalProcessSandbox(workspace_dir)
+
         # Compensation Engine Handlers (tool_name -> Callable(tool_args, tool_result))
         self.compensation_handlers: Dict[str, Callable[[Dict[str, Any], Any], None]] = {}
 
@@ -76,9 +85,10 @@ class KetanHarness:
         reversibility: ReversibilityKind = ReversibilityKind.REVERSIBLE
     ) -> Checkpoint:
         """
-        Creates a synchronized checkpoint across both Ledgers:
+        Creates a synchronized checkpoint across both Ledgers & WAL Journal:
         1. Takes incremental workspace snapshot.
-        2. Records conversation prompt state, tool calls, and reversibility metadata in KetanLedger.
+        2. Writes TX_BEGIN record to persistent journal log (.ketan/journal.jsonl).
+        3. Records conversation prompt state, tool calls, and reversibility metadata in KetanLedger.
         """
         with self._lock:
             self.current_step += 1
@@ -95,6 +105,14 @@ class KetanHarness:
                 custom_state=custom_state
             )
             cp.turn.reversibility = reversibility
+
+            # Persist TX_BEGIN event to WAL journal
+            self.journal.record_event(
+                tx_id=checkpoint_id,
+                state=TransactionState.BEGIN,
+                step=self.current_step,
+                payload={"reversibility": reversibility.value, "tool_calls": tool_calls}
+            )
 
             ctg_node = self.causal_graph.record_checkpoint(
                 checkpoint_id=checkpoint_id,
@@ -119,10 +137,11 @@ class KetanHarness:
         Executes a tool within a transactional Ketan-OS boundary:
         1. Evaluates Pre-flight Invariant Verification (including path confinement & safety guards).
         2. If Pre-flight fails: cancels execution, triggers rollback to current_checkpoint.
-        3. Runs tool_fn.
+        3. Runs tool_fn via sandbox engine.
         4. Inspects observation with Epistemic Belief Engine to detect contradictions.
         5. Runs Post-flight Invariant Verification.
         6. If Post-flight fails: triggers rollback to current_checkpoint.
+        7. On success: writes TX_COMMIT event to WAL journal.
         """
         with self._lock:
             current_checkpoint.turn.reversibility = reversibility
@@ -213,6 +232,14 @@ class KetanHarness:
                 self.rollback(current_checkpoint.checkpoint_id, reason=failure_msg, counterfactual_hint=hint)
                 return False, tool_result, hint
 
+            # Record TX_COMMIT event in WAL journal
+            self.journal.record_event(
+                tx_id=current_checkpoint.checkpoint_id,
+                state=TransactionState.COMMIT,
+                step=self.current_step,
+                payload={"tool_name": tool_name}
+            )
+
             return True, tool_result, None
 
     def rollback(
@@ -226,7 +253,8 @@ class KetanHarness:
         1. Reverts workspace filesystem to target_checkpoint_id snapshot.
         2. Executes registered compensation actions for COMPENSATABLE operations.
         3. Flags IRREVERSIBLE side effects.
-        4. Truncates prompt stack to checkpoint step and appends counterfactual hint.
+        4. Writes TX_ROLLBACK event to WAL journal.
+        5. Truncates prompt stack to checkpoint step and appends counterfactual hint.
         """
         with self._lock:
             cp = self.ledger.get_checkpoint(target_checkpoint_id)
@@ -248,6 +276,14 @@ class KetanHarness:
                 f"Attempt {attempts}/{self.max_rollback_attempts}"
             )
 
+            # Record TX_ROLLBACK event to WAL journal
+            self.journal.record_event(
+                tx_id=target_checkpoint_id,
+                state=TransactionState.ROLLBACK,
+                step=self.current_step,
+                payload={"reason": reason}
+            )
+
             # Phase 1: Workspace Filesystem Recovery
             actions = self.shadow_fs.rollback_to(cp.fs_snapshot_id)
 
@@ -265,6 +301,12 @@ class KetanHarness:
                         try:
                             self.compensation_handlers[t_name](t_args, None)
                             executed_compensations.append(f"Executed compensation for '{t_name}'")
+                            self.journal.record_event(
+                                tx_id=p_cp.checkpoint_id,
+                                state=TransactionState.COMPENSATE,
+                                step=p_cp.step_number,
+                                payload={"tool_name": t_name}
+                            )
                             logger.info(f"[Ketan-OS Compensation] Executed compensation for tool '{t_name}'")
                         except Exception as ex:
                             logger.error(f"[Ketan-OS Compensation Error] Failed compensation for '{t_name}': {str(ex)}")
@@ -327,6 +369,11 @@ class KetanHarness:
             snapshot_id = cp.fs_snapshot_id if cp else checkpoint_id
             return self.shadow_fs.rollback_to(snapshot_id)
 
+    def recover_uncommitted_transactions(self) -> List[str]:
+        """Scans WAL journal on startup and returns uncommitted transaction IDs from process crashes."""
+        with self._lock:
+            return self.journal.recover_uncommitted_transactions()
+
     def cleanup(self):
         """Clean up temporary resources."""
         with self._lock:
@@ -335,7 +382,7 @@ class KetanHarness:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type, exc_tb, exc_val):
         self.cleanup()
 
 
