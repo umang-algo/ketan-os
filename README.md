@@ -26,13 +26,13 @@ Modern AI agent frameworks (LangGraph, AutoGen, CrewAI, Claude Code) are powerfu
 
 ## 🌟 4 Core Substrate Pillars
 
-| Core Pillar | Component | Performance | What Ketan-OS Does |
-|:---|:---|:---:|:---|
-| **1. Sub-Second Transactional ShadowFS** | `KetanShadowFS` | **0.75 ms** (1k files) | Takes incremental, content-addressed snapshots of the workspace using SHA-256 blob deduplication (`blobs/<sha256>`). Stores unique file contents once. |
-| **2. Atomic Time-Travel Rollback** | `KetanHarness` & `KetanLedger` | **1.00 ms** rollback | On any crash, exception, syntax error, or assertion failure, the workspace is reverted byte-for-byte to the last clean checkpoint. Zero state leaks across 100+ crashes. |
-| **3. Multi-Layer Pre-Flight Guards** | `InvariantVerifier` | Sub-millisecond | Evaluates Python AST syntax before file writes hit disk and inspects shell commands for destructive patterns (`rm -rf /`, `rm -rf $HOME`, device wipes, fork bombs, obfuscated pipes). |
-| **4. Live Causal Execution Trace Graph** | `KetanTraceGraph` | Live DAG Lineage | Records every tool call, checkpoint, failure, and rollback into a directed acyclic graph (DAG). On failure, automatically traverses the DAG backwards to explain the root cause. |
-| **Epistemic Belief Engine** | `EpistemicBeliefEngine` | **0.011 ms** inspection | Tracks factual beliefs about workspace state. Uses type coercion (`_values_are_equivalent`) to prevent false positives and auto-prunes contradicted prompt assumptions. |
+| Core Pillar | Component | What Ketan-OS Does |
+|:---|:---|:---|
+| **1. Transactional Workspace Snapshotting** | `KetanShadowFS` | Takes incremental, content-addressed workspace snapshots using SHA-256 blob deduplication (`blobs/<sha256>`). Stores unique file contents once to enable instant reversion. |
+| **2. Atomic Time-Travel Rollback** | `KetanHarness` & `KetanLedger` | On any crash, exception, syntax error, or command failure, the workspace is reverted byte-for-byte to the last clean checkpoint. Guaranteed zero state leaks across crashes. |
+| **3. Multi-Layer Pre-Flight Guards** | `InvariantVerifier` | Validates Python AST syntax before file writes hit disk and blocks destructive shell operations (`rm -rf /`, `rm -rf $HOME`, device wipes, fork bombs, obfuscated pipes). |
+| **4. Causal Execution Trace Graph** | `KetanTraceGraph` | Records tool calls, checkpoints, failures, and rollbacks in a directed acyclic graph (DAG). On failure, automatically traverses the DAG backwards to explain the root cause. |
+| **Epistemic Belief Engine** | `EpistemicBeliefEngine` | Tracks factual beliefs about workspace state. Uses type coercion (`_values_are_equivalent`) to prevent false positives and auto-prunes contradicted prompt assumptions. |
 
 ---
 
@@ -64,14 +64,13 @@ graph TD
             Ledger["📋 KetanLedger
             Checkpoint Registry"]
             ShadowFS["💾 KetanShadowFS
-            Content-Addressed Snapshot
-            0.75ms / 1,000 files"]
+            Content-Addressed Snapshotting"]
             Ledger --> ShadowFS
         end
 
         subgraph Cognition [" Epistemic & Belief Layer "]
             Epistemic["🧠 EpistemicBeliefEngine
-            Contradiction Inspection (0.011ms)
+            Contradiction Inspection &
             Prompt Auto-Pruning"]
         end
 
@@ -85,7 +84,7 @@ graph TD
 
         subgraph TimeTravel [" Time-Travel Rollback "]
             Rollback["⏱️ Rollback Controller
-            1.00ms Reversion"]
+            Atomic State Reversion"]
             Counterfactual["💡 Counterfactual Engine
             Diagnostic Hint Injector"]
             Rollback --> Counterfactual
@@ -105,7 +104,7 @@ graph TD
     Commit --> CTG
     Commit --> Ledger
 
-    Rollback -->|"⑥ Revert FS (1.00ms)"| ShadowFS
+    Rollback -->|"⑥ Revert FS"| ShadowFS
     Rollback -->|"⑦ Record Failure Node"| CTG
     Counterfactual -->|"⑧ Inject Hint"| LLM
 
@@ -210,7 +209,7 @@ Add to `~/.claude/claude.json`:
 | Module | Class | What It Does |
 |---|---|---|
 | `ketan/core.py` | `KetanHarness` | Central thread-safe coordinator engine |
-| `ketan/shadow_fs.py` | `KetanShadowFS` | Incremental workspace snapshotting & rollback (0.75ms / 1k files) |
+| `ketan/shadow_fs.py` | `KetanShadowFS` | Incremental workspace snapshotting & rollback |
 | `ketan/dual_ledger.py` | `KetanLedger` | Checkpoint registry synchronizing FS + prompt state |
 | `ketan/verifier.py` | `InvariantVerifier` | Pre-flight AST syntax & dangerous bash command guards |
 | `ketan/causal_graph.py` | `KetanTraceGraph` | Live execution DAG + root cause failure explanation |
@@ -225,13 +224,9 @@ Add to `~/.claude/claude.json`:
 ```bash
 # Run unit test suite
 uv run pytest tests/
-# → 19 passed in 0.44s
 
-# Run empirical benchmark suite
+# Run empirical performance benchmark suite
 uv run python examples/benchmark_ketan_performance.py
-# → 1,000 Files Snapshot Latency: 0.74 ms
-# → Time-Travel Rollback Latency: 0.95 ms
-# → Data Integrity & Zero State Leak: 100% VERIFIED
 ```
 
 ---
