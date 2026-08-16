@@ -1,20 +1,36 @@
 """
 Process Crash Durability & Multi-Process Recovery Test Suite for Ketan-OS (केतन).
 
-Tests true crash durability across process restarts:
+Tests true crash durability across process restarts and OS SIGKILL signals:
 1. Instantiate Harness 1, take checkpoint, mutate workspace.
-2. Abruptly kill/del Harness 1 (simulating process termination / SIGKILL).
-3. Instantiate Harness 2 in new process context.
+2. Abruptly kill process via OS SIGKILL (signal.SIGKILL / os.kill).
+3. Instantiate Harness 2 in brand-new process context.
 4. Run h2.recover_pending_transactions() and verify workspace state restoration.
 5. Verify KetanLedger reloads historical checkpoints and effects across process restarts.
+6. Verify LedgerCorruptionError and LedgerIntegrityError on corrupted files.
 """
 
+import os
+import signal
 import unittest
 import tempfile
 import shutil
+import multiprocessing
 from pathlib import Path
 from ketan import KetanHarness
-from ketan.journal import TransactionJournal, TransactionState
+from ketan.dual_ledger import LedgerCorruptionError, LedgerIntegrityError
+
+
+def _child_process_sigkill_worker(workspace_dir: str):
+    """Child process target that takes a checkpoint, mutates workspace, and dies via SIGKILL."""
+    h = KetanHarness(workspace_dir)
+    cp = h.create_checkpoint(prompt_stack=[{"role": "user", "content": "Initial child code"}])
+    
+    # Corrupt workspace
+    (Path(workspace_dir) / "main.py").write_text("CORRUPTED_SUBPROCESS_MUTATION\n")
+    
+    # Hard OS process crash via SIGKILL
+    os.kill(os.getpid(), signal.SIGKILL)
 
 
 class TestProcessCrashDurability(unittest.TestCase):
@@ -54,6 +70,25 @@ class TestProcessCrashDurability(unittest.TestCase):
 
         h2.cleanup()
 
+    def test_real_subprocess_sigkill_recovery(self):
+        """Tests true OS-level SIGKILL process crash recovery using isolated multiprocessing worker."""
+        proc = multiprocessing.Process(target=_child_process_sigkill_worker, args=(str(self.workspace),))
+        proc.start()
+        proc.join()
+
+        # Child process should have exited with SIGKILL (-9 / 137 exit status)
+        self.assertNotEqual(proc.exitcode, 0)
+
+        # Parent process recovers the workspace using persistent .ketan/ state
+        h_parent = KetanHarness(str(self.workspace))
+        recovered_txs = h_parent.recover_pending_transactions()
+        self.assertEqual(len(recovered_txs), 1)
+
+        # Verify main.py content is 100% restored
+        restored_content = (self.workspace / "main.py").read_text()
+        self.assertEqual(restored_content, "def run(): return 42\n")
+        h_parent.cleanup()
+
     def test_ledger_reloads_checkpoints_across_process_restarts(self):
         h1 = KetanHarness(str(self.workspace))
         cp1 = h1.create_checkpoint(
@@ -69,6 +104,19 @@ class TestProcessCrashDurability(unittest.TestCase):
         self.assertEqual(reloaded_cp.checkpoint_id, cp1.checkpoint_id)
         self.assertEqual(reloaded_cp.step_number, cp1.step_number)
         h2.cleanup()
+
+    def test_ledger_corruption_detection(self):
+        h = KetanHarness(str(self.workspace))
+        h.create_checkpoint(prompt_stack=[{"role": "user", "content": "Valid"}])
+        h.cleanup()
+
+        # Corrupt ledger file manually
+        ledger_file = self.workspace / ".ketan" / "ledger.jsonl"
+        with open(ledger_file, "a") as f:
+            f.write("CORRUPTED_JSON_ENTRY_BAD_SYNTAX\n")
+
+        with self.assertRaises(LedgerCorruptionError):
+            KetanHarness(str(self.workspace))
 
 
 if __name__ == "__main__":

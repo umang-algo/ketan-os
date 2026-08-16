@@ -102,6 +102,13 @@ class KetanHarness:
             fs_snapshot = self.shadow_fs.create_snapshot(checkpoint_id)
             fs_root_hash = self.shadow_fs.compute_current_fs_root_hash()
 
+            default_effect = Effect(
+                effect_id=f"eff_fs_{checkpoint_id}",
+                system="filesystem",
+                target=self.workspace_dir,
+                reversibility=reversibility
+            )
+
             cp = self.ledger.record_checkpoint(
                 checkpoint_id=checkpoint_id,
                 step_number=self.current_step,
@@ -109,18 +116,9 @@ class KetanHarness:
                 fs_snapshot_id=fs_snapshot.snapshot_id,
                 tool_calls=tool_calls,
                 custom_state=custom_state,
-                expected_fs_root_hash=fs_root_hash
-            )
-            cp.turn.reversibility = reversibility
-
-            # Record default filesystem Effect
-            cp.turn.add_effect(
-                Effect(
-                    effect_id=f"eff_fs_{checkpoint_id}",
-                    system="filesystem",
-                    target=self.workspace_dir,
-                    reversibility=reversibility
-                )
+                expected_fs_root_hash=fs_root_hash,
+                reversibility=reversibility,
+                effects=[default_effect]
             )
 
             # Persist TX_BEGIN event to WAL journal
@@ -130,6 +128,7 @@ class KetanHarness:
                 step=self.current_step,
                 payload={"reversibility": reversibility.value, "tool_calls": tool_calls, "state_root": cp.state_root_hash}
             )
+
 
             ctg_node = self.causal_graph.record_checkpoint(
                 checkpoint_id=checkpoint_id,
