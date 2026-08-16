@@ -3,13 +3,13 @@ import unittest
 import tempfile
 import shutil
 from pathlib import Path
-from ketan.sandboxes import LocalProcessSandbox, DockerContainerSandbox
+from ketan.sandboxes import LocalExecutionBackend, LocalProcessSandbox, DockerContainerSandbox
 
 
 class TestSandboxes(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = tempfile.mkdtemp(prefix="ketan_sb_test_")
-        self.sandbox = LocalProcessSandbox(self.tmp_dir)
+        self.sandbox = LocalExecutionBackend(self.tmp_dir)
 
     def tearDown(self):
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
@@ -28,10 +28,11 @@ class TestSandboxes(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("hello sandbox", out)
 
-    def test_docker_sandbox_fallback(self):
+    def test_docker_sandbox_fails_closed_when_unavailable(self):
         docker_sb = DockerContainerSandbox(self.tmp_dir)
-        code, out, err = docker_sb.execute_bash("echo 'docker test'")
-        self.assertEqual(code, 0)
+        if not docker_sb.docker_available:
+            with self.assertRaises(RuntimeError):
+                docker_sb.execute_bash("echo 'docker test'")
 
 
 if __name__ == "__main__":

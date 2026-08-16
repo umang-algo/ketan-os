@@ -2,7 +2,8 @@
 Dedicated Adversarial Security & Confinement Test Suite for Ketan-OS (केतन).
 
 Tests path traversal attacks, absolute path escapes, symlink boundary escapes,
-dangerous subshell command obfuscation, and WAL crash recovery integrity.
+dangerous subshell command obfuscation, fail-closed Docker sandbox,
+parameterized SQL compensation, and WAL crash recovery engine.
 """
 
 import unittest
@@ -11,8 +12,10 @@ import shutil
 import os
 from pathlib import Path
 from ketan.verifier import InvariantVerifier
-from ketan.sandboxes import LocalProcessSandbox
+from ketan.sandboxes import LocalExecutionBackend, DockerContainerSandbox
 from ketan.journal import TransactionJournal, TransactionState
+from ketan.compensation import GitCompensationDriver, SQLCompensationDriver
+from ketan import KetanHarness
 
 
 class TestSecurityAdversarial(unittest.TestCase):
@@ -20,7 +23,7 @@ class TestSecurityAdversarial(unittest.TestCase):
         self.tmp_dir = tempfile.mkdtemp(prefix="ketan_adv_sec_")
         self.workspace = Path(self.tmp_dir).resolve()
         self.verifier = InvariantVerifier()
-        self.sandbox = LocalProcessSandbox(str(self.workspace))
+        self.sandbox = LocalExecutionBackend(str(self.workspace))
 
     def tearDown(self):
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
@@ -73,26 +76,47 @@ class TestSecurityAdversarial(unittest.TestCase):
             shutil.rmtree(ext_dir, ignore_errors=True)
 
     def test_dangerous_subshell_commands_blocked(self):
-        # 1. Base64 pipe to shell
         res1 = self.verifier.verify_pre_flight("bash", {"command": "echo 'cm0gLXJmIC8=' | base64 -d | bash"})
         self.assertTrue(any(not r.passed for r in res1))
 
-        # 2. Destructive rm -rf $HOME
         res2 = self.verifier.verify_pre_flight("bash", {"command": "rm -rf $HOME"})
         self.assertTrue(any(not r.passed for r in res2))
 
-        # 3. Disk wipe dd
         res3 = self.verifier.verify_pre_flight("bash", {"command": "dd if=/dev/zero of=/dev/sda"})
         self.assertTrue(any(not r.passed for r in res3))
 
-    def test_wal_journal_durability_across_crashes(self):
-        journal1 = TransactionJournal(str(self.workspace))
-        journal1.record_event("tx_99", TransactionState.BEGIN, step=1, payload={"op": "insert"})
+    def test_docker_unavailable_fails_closed(self):
+        docker_sb = DockerContainerSandbox(str(self.workspace))
+        docker_sb.docker_available = False
 
-        # Simulate abrupt process restart by creating new journal instance reading existing file
-        journal2 = TransactionJournal(str(self.workspace))
-        uncommitted = journal2.recover_uncommitted_transactions()
-        self.assertIn("tx_99", uncommitted)
+        with self.assertRaises(RuntimeError) as ctx:
+            docker_sb.execute_bash("echo 'test'")
+        self.assertIn("Fail-Closed", str(ctx.exception))
+
+    def test_sql_parameterized_compensation_sanitization(self):
+        # Test identifier sanitization
+        with self.assertRaises(ValueError):
+            SQLCompensationDriver.create_insert_compensation("users; DROP TABLE users;--", "id", 1, lambda q, p: None)
+
+        executed = []
+        def mock_exec(query, params):
+            executed.append((query, params))
+
+        handler = SQLCompensationDriver.create_insert_compensation("users", "user_id", "USR_42", mock_exec)
+        handler({}, None)
+        self.assertEqual(len(executed), 1)
+        self.assertEqual(executed[0][0], "DELETE FROM users WHERE user_id = ?")
+        self.assertEqual(executed[0][1], ("USR_42",))
+
+    def test_automated_crash_recovery_engine(self):
+        harness = KetanHarness(str(self.workspace))
+        cp = harness.create_checkpoint(prompt_stack=[{"role": "user", "content": "Crash test"}])
+
+        # Simulate uncommitted transaction from abrupt process crash
+        recovered = harness.recover_pending_transactions()
+        self.assertEqual(len(recovered), 1)
+        self.assertEqual(recovered[0], cp.checkpoint_id)
+        harness.cleanup()
 
 
 if __name__ == "__main__":

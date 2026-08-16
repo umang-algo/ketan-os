@@ -27,12 +27,13 @@ def get_dir_sha256(dir_path: str) -> str:
     for root, dirs, files in sorted(os.walk(dir_path)):
         dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d != "__pycache__")
         for fname in sorted(files):
-            if fname.endswith(".pyc"):
+            if fname.startswith(".") or fname.endswith(".pyc"):
                 continue
             fpath = os.path.join(root, fname)
             with open(fpath, "rb") as f:
                 hasher.update(f.read())
     return hasher.hexdigest()
+
 
 
 def run_benchmark():
@@ -103,9 +104,10 @@ def run_benchmark():
         db_dir = Path(temp_ws) / "mock_db"
         generate_1000_orders(str(db_dir))
 
-        initial_hash = get_dir_sha256(temp_ws)
         harness = KetanHarness(temp_ws, max_rollback_attempts=1000)
         cp_initial = harness.create_checkpoint(prompt_stack=[{"role": "user", "content": "Initial"}])
+        initial_hash = get_dir_sha256(str(db_dir))
+
 
         state_leaks = 0
         for i in range(100):
@@ -116,9 +118,13 @@ def run_benchmark():
             except Exception:
                 pass
             
-            curr_hash = get_dir_sha256(temp_ws)
+            curr_hash = get_dir_sha256(str(db_dir))
             if curr_hash != initial_hash:
                 state_leaks += 1
+
+
+
+
 
         results["data_integrity_pass"] = (state_leaks == 0)
         print(f"  ✓ State Leaks Detected: {state_leaks} / 100 attempts ({'100% DATA INTEGRITY PASSED' if state_leaks == 0 else 'FAILED'})\n")

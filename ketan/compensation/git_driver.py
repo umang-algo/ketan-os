@@ -2,6 +2,7 @@
 Git System Compensation Driver for Ketan-OS (केतन).
 
 Generates automated compensation handlers for Git operations (git commit, git branch, working tree mutations).
+Targeting specific commit SHAs rather than blindly assuming HEAD.
 """
 
 import subprocess
@@ -16,17 +17,18 @@ class GitCompensationDriver:
     
     @staticmethod
     def compensate_commit(tool_args: Dict[str, Any], tool_result: Any, workspace_root: str) -> None:
-        """Compensation handler for git commit: executes git revert HEAD --no-edit."""
+        """Compensation handler for git commit: executes git revert <commit_sha> --no-edit."""
+        commit_sha = str(tool_args.get("commit_sha") or tool_args.get("sha") or "HEAD")
         try:
             res = subprocess.run(
-                ["git", "revert", "HEAD", "--no-edit"],
+                ["git", "revert", commit_sha, "--no-edit"],
                 cwd=workspace_root,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
             )
             if res.returncode == 0:
-                logger.info("[GitCompensationDriver] Successfully reverted last Git commit.")
+                logger.info(f"[GitCompensationDriver] Successfully reverted Git commit '{commit_sha}'.")
             else:
                 logger.warning(f"[GitCompensationDriver] Git revert warning: {res.stderr}")
         except Exception as ex:

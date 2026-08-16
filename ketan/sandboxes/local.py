@@ -1,5 +1,5 @@
 """
-Local Process Sandbox Engine for Ketan-OS (केतन).
+Local Process Execution Backend for Ketan-OS (केतन).
 
 Executes commands and file operations locally inside the workspace root
 with strict canonical path isolation enforcement.
@@ -12,8 +12,8 @@ from typing import Tuple, Dict, Any, Optional
 from ketan.sandboxes.base import BaseSandboxEngine
 
 
-class LocalProcessSandbox(BaseSandboxEngine):
-    """Local workspace execution engine with canonical path confinement."""
+class LocalExecutionBackend(BaseSandboxEngine):
+    """Local workspace execution backend with canonical path confinement."""
     
     def _resolve_safe(self, rel_path: str) -> Path:
         p = Path(rel_path)
@@ -52,3 +52,7 @@ class LocalProcessSandbox(BaseSandboxEngine):
     def read_file(self, rel_path: str) -> str:
         target_file = self._resolve_safe(rel_path)
         return target_file.read_text(encoding="utf-8")
+
+
+# Alias for backward compatibility
+LocalProcessSandbox = LocalExecutionBackend

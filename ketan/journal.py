@@ -22,6 +22,9 @@ class TransactionState(str, Enum):
     COMMIT      = "TX_COMMIT"
     ROLLBACK    = "TX_ROLLBACK"
     COMPENSATE  = "TX_COMPENSATE"
+    RECOVERING  = "TX_RECOVERING"
+    RECOVERED   = "TX_RECOVERED"
+
 
 
 class JournalRecord:
@@ -126,8 +129,9 @@ class TransactionJournal:
             for rec in records:
                 if rec.state == TransactionState.BEGIN:
                     tx_states[rec.tx_id] = "PENDING"
-                elif rec.state in (TransactionState.COMMIT, TransactionState.ROLLBACK):
+                elif rec.state in (TransactionState.COMMIT, TransactionState.ROLLBACK, TransactionState.COMPENSATE, TransactionState.RECOVERED):
                     tx_states[rec.tx_id] = rec.state.value
+
                     
             uncommitted = [tx_id for tx_id, status in tx_states.items() if status == "PENDING"]
             return uncommitted
