@@ -8,9 +8,8 @@
 [![ketan-os MCP server](https://glama.ai/mcp/servers/umang-algo/ketan-os/badges/score.svg)](https://glama.ai/mcp/servers/umang-algo/ketan-os)
 [![M8ven Score](https://m8ven.ai/badge/mcp/umang-algo-ketan-os-1k4rg0)](https://m8ven.ai/mcp/umang-algo-ketan-os-1k4rg0)
 
-
-
 ---
+
 
 ## 🔱 Origin & Philosophy
 
