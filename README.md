@@ -42,15 +42,21 @@ By wrapping tool execution in content-addressed state snapshotting, canonical pa
 
 ---
 
-## 🛡️ Side-Effect Reversibility Model
+## 🛡️ Side-Effect Reversibility Matrix
 
-Ketan-OS categorizes tool side effects into three distinct transaction levels:
+Ketan-OS tracks tool operations across three distinct transaction recovery tiers:
 
-1. **`REVERSIBLE`**: Local workspace edits, regular tracked file writes, local file operations. (Restored automatically via `KetanShadowFS`).
-2. **`COMPENSATABLE`**: Database mutations or Git commits with registered inverse actions. (Reverted via explicit compensation steps).
-3. **`IRREVERSIBLE`**: External network API requests (emails sent, Stripe charges, remote webhooks). (Flagged with diagnostic counterfactual hints on failure).
+| System / Target | Reversibility Tier | Recovery Strategy |
+|:---|:---:|:---|
+| **Local Workspace Files** | `REVERSIBLE` | Automatic content-addressed state rollback via `KetanShadowFS` |
+| **Git Repositories** | `REVERSIBLE` | Automated workspace restore / branch checkpoint reversion |
+| **PostgreSQL / SQL Databases** | `COMPENSATABLE` | Inverse transaction query or registered compensation handler |
+| **S3 / Blob Storage** | `COMPENSATABLE` | Object versioning rollback or compensation handler |
+| **GitHub / AWS / Infrastructure** | `COMPENSATABLE` | Registered API inverse call (e.g. close issue, delete resource) |
+| **External Network APIs / Email** | `IRREVERSIBLE` | Pre-execution policy check & counterfactual failure hint |
 
 ---
+
 
 ## 🏗️ System Architecture
 
