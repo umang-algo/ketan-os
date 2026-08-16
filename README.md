@@ -81,10 +81,20 @@ graph TD
         Harness["🪔 KetanHarness
         Thread-Safe Coordinator"]
 
+        subgraph WALJournal [" Durable WAL Journal "]
+            Journal["📝 TransactionJournal
+            .ketan/journal.jsonl Persistence"]
+        end
+
         subgraph PreFlight [" Pre-Flight Guard Layer "]
             Verifier["🛡️ InvariantVerifier
             Canonical Path Confinement
             Symlink Guard + AST & Safety Rules"]
+        end
+
+        subgraph Sandboxes [" Execution Sandbox Engines "]
+            Sandbox["📦 Local / Docker Sandbox Engine
+            Path Confinement & Container Isolation"]
         end
 
         subgraph StorageLedger [" Dual-Ledger Substrate "]
@@ -109,31 +119,37 @@ graph TD
             CTG --> RCA
         end
 
-        subgraph TimeTravel [" Transaction Recovery "]
+        subgraph TimeTravel [" Transaction Recovery & Compensation "]
             Rollback["⏱️ Rollback Controller
             Workspace State Reversion"]
+            CompDrivers["🔄 System Compensation Drivers
+            Git & SQL Inverse Actions"]
             Counterfactual["💡 Counterfactual Engine
             Diagnostic Hint Injector"]
-            Rollback --> Counterfactual
+            Rollback --> CompDrivers
+            CompDrivers --> Counterfactual
         end
     end
 
     Wrapper -->|"① Intercept"| Harness
-    Harness -->|"② Pre-flight"| Verifier
-    Verifier -->|"③ Pre-Flight Pass"| Epistemic
-    Epistemic -->|"④ Checkpoint"| ShadowFS
-    ShadowFS -->|"⑤ Execute"| Execution["⚙️ Tool Execution"]
+    Harness -->|"② WAL Record TX_BEGIN"| Journal
+    Journal -->|"③ Pre-flight"| Verifier
+    Verifier -->|"④ Pre-Flight Pass"| Epistemic
+    Epistemic -->|"⑤ Checkpoint"| ShadowFS
+    ShadowFS -->|"⑥ Sandbox Exec"| Sandbox
+    Sandbox -->|"⑦ Execute Tool"| Execution["⚙️ Tool Execution"]
 
     Verifier -.->|Path / Syntax / Safety Fail| Rollback
     Execution -->|Crash / Exception| Rollback
 
-    Execution -->|Success| Commit["🟢 Commit & Record"]
+    Execution -->|Success| Commit["🟢 WAL Commit & Record"]
     Commit --> CTG
     Commit --> Ledger
 
-    Rollback -->|"⑥ Revert Workspace"| ShadowFS
-    Rollback -->|"⑦ Record Failure Node"| CTG
-    Counterfactual -->|"⑧ Inject Hint"| LLM
+    Rollback -->|"⑧ Revert Workspace"| ShadowFS
+    Rollback -->|"⑨ Execute Compensations"| CompDrivers
+    Rollback -->|"⑩ Record Failure Node"| CTG
+    Counterfactual -->|"⑪ Inject Hint"| LLM
 
     classDef agent    fill:#f3e8ff,stroke:#7c3aed,stroke-width:2px,color:#1e1b4b
     classDef core     fill:#e0f2fe,stroke:#0284c7,stroke-width:2px,color:#0c4a6e
@@ -143,12 +159,13 @@ graph TD
     classDef exec     fill:#f0fdf4,stroke:#16a34a,stroke-width:2px,color:#14532d
 
     class LLM,Wrapper,MCP agent
-    class Harness,Verifier,Epistemic core
+    class Harness,Verifier,Epistemic,Journal,Sandbox core
     class Ledger,ShadowFS storage
-    class Rollback,Counterfactual rollback
+    class Rollback,CompDrivers,Counterfactual rollback
     class CTG,RCA ctg
     class Execution,Commit exec
 ```
+
 
 ---
 
