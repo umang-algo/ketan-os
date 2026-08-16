@@ -5,6 +5,8 @@
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Tests](https://img.shields.io/badge/tests-19%20passed-brightgreen.svg)](tests/)
 [![MCP](https://img.shields.io/badge/Claude%20Code-FastMCP%20Ready-blueviolet.svg)](ketan/mcp/server.py)
+[![M8ven Score](https://m8ven.ai/badge/mcp/umang-algo-ketan-os-1k4rg0)](https://m8ven.ai/mcp/umang-algo-ketan-os-1k4rg0)
+
 
 ---
 
