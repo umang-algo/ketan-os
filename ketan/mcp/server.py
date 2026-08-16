@@ -322,8 +322,7 @@ def ketan_write_file_safe(filepath: str, content: str) -> str:
     cp = h.create_checkpoint(prompt_stack=_prompt_stack)
 
     try:
-        abs_path.parent.mkdir(parents=True, exist_ok=True)
-        abs_path.write_text(content, encoding="utf-8")
+        h.sandbox.write_file(filepath, content)
         return (
             f"✅ File written safely.\n"
             f"📄 Path: {filepath}\n"
@@ -346,7 +345,7 @@ def ketan_run_bash_safe(command: str, timeout_seconds: int = 30) -> str:
     Execute a shell command with FULL Ketan-OS protection:
       1. Pre-flight dangerous command guard (blocks rm -rf /, fork bombs, disk wipes, etc.).
       2. Atomic snapshot before execution.
-      3. Run the command in the workspace directory.
+      3. Run the command in the sandbox environment.
       4. On non-zero exit or exception → automatic rollback to pre-command state.
 
     Always prefer this over raw bash for state-changing commands.
@@ -371,17 +370,10 @@ def ketan_run_bash_safe(command: str, timeout_seconds: int = 30) -> str:
     cp = h.create_checkpoint(prompt_stack=_prompt_stack)
 
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            cwd=h.workspace_dir,
-            timeout=timeout_seconds,
-        )
-        stdout = result.stdout.strip()
-        stderr = result.stderr.strip()
-        exit_code = result.returncode
+        exit_code, stdout, stderr = h.sandbox.execute_bash(command)
+        stdout = stdout.strip()
+        stderr = stderr.strip()
+
 
         if exit_code != 0:
             h.causal_graph.record_failure(

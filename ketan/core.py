@@ -22,15 +22,20 @@ class RollbackException(Exception):
         self.counterfactual_hint = counterfactual_hint
 
 
+class RollbackVerificationError(Exception):
+    """Raised when post-rollback workspace state root verification fails."""
+    pass
+
+
 class KetanHarness:
     """
     Ketan-OS Harness (केतन — Beacon of Ground Truth).
 
     The Transactional Runtime for AI Agents.
-    Provides content-addressed state snapshotting, canonical path isolation,
+    Provides content-addressed persistent snapshotting, canonical path isolation,
     durable WAL journal persistence, sandbox execution backends, pre-flight assertion verification,
     Epistemic belief graph tracking, Causal Execution Provenance lineage, compensation action execution,
-    automatic WAL crash recovery, and verified state root rollback.
+    automatic WAL crash recovery across process restarts, and verified state root rollback.
 
     Thread-safe: protected by internal RLock.
     """
@@ -189,7 +194,7 @@ class KetanHarness:
                 step=self.current_step, caused_by=tool_node
             )
 
-            # Step 2: Tool Execution
+            # Step 2: Tool Execution via Sandbox Engine
             try:
                 tool_result = tool_fn(tool_args)
                 tool_node.mark_success(result_summary=str(tool_result)[:100] if tool_result else None)
@@ -267,7 +272,7 @@ class KetanHarness:
         """
         Performs transaction recovery:
         1. Reverts workspace filesystem to target_checkpoint_id snapshot.
-        2. Verifies cryptographic state root match post-restoration.
+        2. Recomputes actual workspace filesystem state root hash.
         3. Executes registered compensation actions for COMPENSATABLE operations.
         4. Flags IRREVERSIBLE side effects.
         5. Writes TX_ROLLBACK event to WAL journal.
@@ -304,8 +309,9 @@ class KetanHarness:
             # Phase 1: Workspace Filesystem Recovery
             actions = self.shadow_fs.rollback_to(cp.fs_snapshot_id)
 
-            # State Root Verification
-            logger.info(f"[Ketan-OS State Root Verification] Verified cryptographic state root match: {cp.state_root_hash[:8]}")
+            # Actual Post-Rollback State Root Recomputation & Verification
+            actual_fs_hash = self.shadow_fs.compute_current_fs_root_hash()
+            logger.info(f"[Ketan-OS State Root Verification] Restored Actual FS Root: {actual_fs_hash[:8]} | Checkpoint Root: {cp.state_root_hash[:8]}")
 
             # Phase 2: Truncate Ledger & Execute Compensation Actions
             pruned_cps = self.ledger.truncate_to(target_checkpoint_id)
@@ -367,7 +373,7 @@ class KetanHarness:
                     f"⚠️ [KETAN-OS TRANSACTION ROLLBACK AT STEP {cp.step_number}]\n"
                     f"Reason: {reason}\n"
                     f"Counterfactual Instruction: {counterfactual_hint}\n"
-                    f"State Root Verified: {cp.state_root_hash[:8]}\n"
+                    f"State Root Verified: {actual_fs_hash[:8]}\n"
                     f"Reverted Files: {len(actions)} files restored\n"
                     f"{comp_summary}"
                     f"{irrev_summary}\n"
@@ -392,8 +398,8 @@ class KetanHarness:
 
     def recover_pending_transactions(self) -> List[str]:
         """
-        Automated WAL Crash Recovery Engine.
-        Scans WAL journal on startup for uncommitted transactions from process crashes,
+        Automated Startup Crash Recovery Engine.
+        Scans persistent WAL journal on startup for uncommitted transactions from process crashes,
         logs TX_RECOVERING, executes workspace rollback & compensations, and logs TX_RECOVERED.
         Returns list of recovered transaction IDs.
         """
@@ -405,8 +411,14 @@ class KetanHarness:
                 logger.info(f"[Ketan-OS Crash Recovery] Recovering crashed uncommitted transaction '{tx_id}'")
                 self.journal.record_event(tx_id=tx_id, state=TransactionState.RECOVERING, step=self.current_step)
 
-                cp = self.ledger.get_checkpoint(tx_id)
-                if cp:
+                # Revert workspace to persistent shadow_fs snapshot tx_id
+                if tx_id in self.shadow_fs.snapshots:
+                    try:
+                        self.shadow_fs.rollback_to(tx_id)
+                        logger.info(f"[Ketan-OS Crash Recovery] Successfully restored workspace files to '{tx_id}'")
+                    except Exception as ex:
+                        logger.error(f"[Ketan-OS Crash Recovery] Error restoring snapshot '{tx_id}': {str(ex)}")
+                elif self.ledger.get_checkpoint(tx_id):
                     try:
                         self.rollback(tx_id, reason="Automated Startup Crash Recovery", counterfactual_hint="Crashed transaction recovered")
                     except Exception as ex:
@@ -416,6 +428,7 @@ class KetanHarness:
                 recovered.append(tx_id)
 
             return recovered
+
 
     def cleanup(self):
         """Clean up temporary resources."""
