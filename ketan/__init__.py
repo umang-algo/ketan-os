@@ -10,7 +10,8 @@ and epistemic belief contradiction prompt stack pruning.
 
 from ketan.core import KetanHarness, Checkpoint, RollbackException, ChronosHarness
 from ketan.shadow_fs import KetanShadowFS, ShadowFS, FileState, ShadowSnapshot
-from ketan.dual_ledger import KetanLedger, DualLedger, ExecutionTurn, ReversibilityKind
+from ketan.dual_ledger import KetanLedger, DualLedger, ExecutionTurn, ReversibilityKind, Effect
+
 from ketan.verifier import InvariantVerifier, InvariantResult
 from ketan.causal_graph import KetanTraceGraph, CausalTraceGraph, CausalNode, CausalEdge, NodeKind, NodeStatus
 from ketan.epistemic import EpistemicBeliefEngine, BeliefNode, ContradictionEvent

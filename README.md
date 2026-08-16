@@ -3,7 +3,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-32%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-38%20passed-brightgreen.svg)](tests/)
+
 [![MCP](https://img.shields.io/badge/Claude%20Code-FastMCP%20Ready-blueviolet.svg)](ketan/mcp/server.py)
 [![ketan-os MCP server](https://glama.ai/mcp/servers/umang-algo/ketan-os/badges/score.svg)](https://glama.ai/mcp/servers/umang-algo/ketan-os)
 [![M8ven Score](https://m8ven.ai/badge/mcp/umang-algo-ketan-os-1k4rg0)](https://m8ven.ai/mcp/umang-algo-ketan-os-1k4rg0)
