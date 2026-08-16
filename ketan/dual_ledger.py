@@ -1,6 +1,15 @@
 import time
 import threading
+from enum import Enum
 from typing import List, Dict, Any, Optional
+
+
+class ReversibilityKind(str, Enum):
+    """Classification of tool side-effect reversibility in Ketan-OS transactions."""
+    REVERSIBLE    = "REVERSIBLE"     # Local workspace edits, tracked regular files
+    COMPENSATABLE = "COMPENSATABLE"  # DB writes or Git commits with explicit undo actions
+    IRREVERSIBLE  = "IRREVERSIBLE"   # External network API calls, emails, remote webhooks
+
 
 class ExecutionTurn:
     """Represents a single execution step/turn in Ketan-OS."""
@@ -10,13 +19,15 @@ class ExecutionTurn:
         step_number: int,
         prompt_snapshot: List[Dict[str, Any]],
         tool_calls: Optional[List[Dict[str, Any]]] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        reversibility: ReversibilityKind = ReversibilityKind.REVERSIBLE
     ):
         self.turn_id = turn_id
         self.step_number = step_number
         self.prompt_snapshot = [dict(msg) for msg in prompt_snapshot]  # Deep copy
         self.tool_calls = tool_calls or []
         self.metadata = metadata or {}
+        self.reversibility = reversibility
         self.timestamp = time.time()
 
     def to_dict(self) -> Dict[str, Any]:
@@ -25,9 +36,11 @@ class ExecutionTurn:
             "step_number": self.step_number,
             "messages_count": len(self.prompt_snapshot),
             "tool_calls": self.tool_calls,
+            "reversibility": self.reversibility.value,
             "metadata": self.metadata,
             "timestamp": self.timestamp
         }
+
 
 
 class Checkpoint:

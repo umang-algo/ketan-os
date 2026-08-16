@@ -1,15 +1,14 @@
 # Ketan-OS 🪔 (केतन)
-### The Transactional Intelligence Substrate & Beacon of Ground Truth for AI Agents
+### The Transactional Runtime for AI Agents
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-19%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-21%20passed-brightgreen.svg)](tests/)
 [![MCP](https://img.shields.io/badge/Claude%20Code-FastMCP%20Ready-blueviolet.svg)](ketan/mcp/server.py)
 [![ketan-os MCP server](https://glama.ai/mcp/servers/umang-algo/ketan-os/badges/score.svg)](https://glama.ai/mcp/servers/umang-algo/ketan-os)
 [![M8ven Score](https://m8ven.ai/badge/mcp/umang-algo-ketan-os-1k4rg0)](https://m8ven.ai/mcp/umang-algo-ketan-os-1k4rg0)
 
 ---
-
 
 ## 🔱 Origin & Philosophy
 
@@ -19,23 +18,37 @@
 > *"I am the Self, O Gudakesha, seated in the hearts of all beings.  
 > I am the beginning, the middle, and the end of all beings."*  
 
-**Ketan (केतन)** literally means *Banner, Beacon, or Dwelling* in Sanskrit — the fixed, unmovable point of reference from which all navigation begins. In the context of AI agents, Ketan-OS is that **beacon of ground truth**: the substrate that ensures an agent's environment, memory, and decisions are always anchored to verifiable, uncorrupted reality.
+**Ketan (केतन)** literally means *Banner, Beacon, or Dwelling* in Sanskrit — the fixed, unmovable point of reference from which all navigation begins.
 
-Modern AI agent frameworks (LangGraph, AutoGen, CrewAI, Claude Code) are powerful orchestration layers — but they are blind to **what is actually happening on disk and in memory**. When an agent writes a malformed file, executes a destructive command, or hallucinates a state that no longer exists, these frameworks have no recovery mechanism. The environment corrupts silently and irrecoverably.
+AI agents perform complex, multi-step actions across files, commands, and external tools — but they lack **transaction semantics**. When an agent writes a malformed file, executes a destructive shell command, or acts on stale assumptions, standard agent frameworks have no rollback mechanism.
 
-**Ketan-OS solves this at the substrate level** — not by competing with agent frameworks, but by serving as an effortless plug-and-play transactional layer beneath them. Wrapping tool calls in atomic snapshot/rollback, multi-layer pre-flight guards, live causal tracing, and epistemic contradiction pruning, Ketan-OS makes agent tool execution safe, reversible, and debuggable.
+**Ketan-OS provides the transactional substrate for AI agents**:
+```text
+BEGIN  →  CHECKPOINT  →  VERIFY  →  COMMIT / ROLLBACK / COMPENSATE
+```
+
+By wrapping tool execution in content-addressed state snapshotting, canonical path isolation, pre-flight assertion guards, causal execution provenance, and prompt contradiction pruning, Ketan-OS makes agent tool execution safe, reversible, and debuggable.
 
 ---
 
-## 🌟 4 Core Substrate Pillars
+## 🌟 4 Core Architectural Subsystems
 
-| Core Pillar | Component | What Ketan-OS Does |
+| Subsystem | Component | What Ketan-OS Does |
 |:---|:---|:---|
-| **1. Transactional Workspace Snapshotting** | `KetanShadowFS` | Takes incremental, content-addressed workspace snapshots using SHA-256 blob deduplication (`blobs/<sha256>`). Stores unique file contents once to enable instant reversion. |
-| **2. Atomic Time-Travel Rollback** | `KetanHarness` & `KetanLedger` | On any crash, exception, syntax error, or command failure, the workspace is reverted byte-for-byte to the last clean checkpoint. Guaranteed zero state leaks across crashes. |
-| **3. Multi-Layer Pre-Flight Guards** | `InvariantVerifier` | Validates Python AST syntax before file writes hit disk and blocks destructive shell operations (`rm -rf /`, `rm -rf $HOME`, device wipes, fork bombs, obfuscated pipes). |
-| **4. Causal Execution Trace Graph** | `KetanTraceGraph` | Records tool calls, checkpoints, failures, and rollbacks in a directed acyclic graph (DAG). On failure, automatically traverses the DAG backwards to explain the root cause. |
-| **Epistemic Belief Engine** | `EpistemicBeliefEngine` | Tracks factual beliefs about workspace state. Uses type coercion (`_values_are_equivalent`) to prevent false positives and auto-prunes contradicted prompt assumptions. |
+| **1. Transactional Workspace Recovery** | `KetanShadowFS` | Takes incremental, content-addressed workspace snapshots using SHA-256 blob deduplication (`blobs/<sha256>`). Reverts tracked regular workspace files to clean checkpoints. |
+| **2. Multi-Layer Pre-Flight Guards** | `InvariantVerifier` | Enforces strict workspace canonical path isolation (`is_relative_to(workspace_root)`), blocks symlink traversal escapes, checks Python AST syntax, and filters destructive shell patterns. |
+| **3. Causal Execution Provenance DAG** | `KetanTraceGraph` | Records tool calls, checkpoints, failures, and rollbacks into a directed acyclic graph (DAG). On failure, automatically traverses the DAG backwards to explain the execution lineage. |
+| **4. State Belief & Fact Store** | `EpistemicBeliefEngine` | Tracks factual assertions about workspace state. Uses type coercion (`_values_are_equivalent`) to prevent false positives and auto-prunes contradicted prompt assumptions. |
+
+---
+
+## 🛡️ Side-Effect Reversibility Model
+
+Ketan-OS categorizes tool side effects into three distinct transaction levels:
+
+1. **`REVERSIBLE`**: Local workspace edits, regular tracked file writes, local file operations. (Restored automatically via `KetanShadowFS`).
+2. **`COMPENSATABLE`**: Database mutations or Git commits with registered inverse actions. (Reverted via explicit compensation steps).
+3. **`IRREVERSIBLE`**: External network API requests (emails sent, Stripe charges, remote webhooks). (Flagged with diagnostic counterfactual hints on failure).
 
 ---
 
@@ -54,40 +67,41 @@ graph TD
         MCP -->|Safe Tool Execution| Wrapper
     end
 
-    subgraph CoreEngine [" 🪔 Ketan-OS Core Substrate "]
+    subgraph CoreEngine [" 🪔 Ketan-OS Transactional Substrate "]
         Harness["🪔 KetanHarness
         Thread-Safe Coordinator"]
 
         subgraph PreFlight [" Pre-Flight Guard Layer "]
             Verifier["🛡️ InvariantVerifier
-            AST Syntax + Dangerous Command Guards"]
+            Canonical Path Confinement
+            Symlink Guard + AST & Safety Rules"]
         end
 
         subgraph StorageLedger [" Dual-Ledger Substrate "]
             Ledger["📋 KetanLedger
-            Checkpoint Registry"]
+            Checkpoint & Reversibility Registry"]
             ShadowFS["💾 KetanShadowFS
-            Content-Addressed Snapshotting"]
+            Content-Addressed Workspace Recovery"]
             Ledger --> ShadowFS
         end
 
-        subgraph Cognition [" Epistemic & Belief Layer "]
+        subgraph Cognition [" State Belief Layer "]
             Epistemic["🧠 EpistemicBeliefEngine
-            Contradiction Inspection &
-            Prompt Auto-Pruning"]
+            Runtime Fact Store &
+            Prompt Contradiction Pruning"]
         end
 
         subgraph CTGSubsystem [" Causal Provenance Engine "]
             CTG["🧬 KetanTraceGraph
-            Live Execution DAG"]
-            RCA["🔍 Root Cause Analyzer
-            Failure Explanation"]
+            Causal Execution Provenance DAG"]
+            RCA["🔍 Provenance Analyzer
+            Execution Lineage Explanation"]
             CTG --> RCA
         end
 
-        subgraph TimeTravel [" Time-Travel Rollback "]
+        subgraph TimeTravel [" Transaction Recovery "]
             Rollback["⏱️ Rollback Controller
-            Atomic State Reversion"]
+            Workspace State Reversion"]
             Counterfactual["💡 Counterfactual Engine
             Diagnostic Hint Injector"]
             Rollback --> Counterfactual
@@ -100,14 +114,14 @@ graph TD
     Epistemic -->|"④ Checkpoint"| ShadowFS
     ShadowFS -->|"⑤ Execute"| Execution["⚙️ Tool Execution"]
 
-    Verifier -.->|Syntax / Safety Fail| Rollback
+    Verifier -.->|Path / Syntax / Safety Fail| Rollback
     Execution -->|Crash / Exception| Rollback
 
     Execution -->|Success| Commit["🟢 Commit & Record"]
     Commit --> CTG
     Commit --> Ledger
 
-    Rollback -->|"⑥ Revert FS"| ShadowFS
+    Rollback -->|"⑥ Revert Workspace"| ShadowFS
     Rollback -->|"⑦ Record Failure Node"| CTG
     Counterfactual -->|"⑧ Inject Hint"| LLM
 
@@ -153,7 +167,7 @@ result = safe_write(
 print(result)
 # → {"success": True, "result": "File written", "hint": ""}
 # If content had a syntax error → {"success": False, "hint": "Fix SyntaxError on line 1..."}
-# → workspace auto-rolled back, not a single byte changed on disk
+# → workspace auto-rolled back cleanly
 ```
 
 ---
@@ -185,41 +199,6 @@ Add to `~/.claude/claude.json`:
 }
 ```
 
-### 3. Available MCP Tools
-
-| Tool | What it does |
-|---|---|
-| `ketan_get_status` | Ground-truth state: steps, checkpoints, failures |
-| `ketan_snapshot` | Take atomic workspace snapshot → get rollback point |
-| `ketan_rollback` | Time-travel revert to any checkpoint |
-| `ketan_get_checkpoints` | List all restore points |
-| `ketan_write_file_safe` | Write file with pre-flight AST guards + auto rollback |
-| `ketan_run_bash_safe` | Run shell command with snapshot + auto rollback |
-| `ketan_check_invariant` | Dry-run invariant check (no execution) |
-| `ketan_get_ctg` | Causal Trace Graph as Mermaid diagram |
-| `ketan_explain_failure` | Root cause explanation of the last failure |
-| `ketan_observe_belief` | Record a workspace fact into Epistemic Engine |
-| `ketan_list_beliefs` | See all tracked beliefs |
-| `ketan_read_file` | Read file + record as belief |
-| `ketan_list_files` | Browse workspace files |
-| `ketan_session_summary` | Full markdown session report |
-| `ketan_init_workspace` | Switch to a different workspace |
-
----
-
-## 🧩 Module Map
-
-| Module | Class | What It Does |
-|---|---|---|
-| `ketan/core.py` | `KetanHarness` | Central thread-safe coordinator engine |
-| `ketan/shadow_fs.py` | `KetanShadowFS` | Incremental workspace snapshotting & rollback |
-| `ketan/dual_ledger.py` | `KetanLedger` | Checkpoint registry synchronizing FS + prompt state |
-| `ketan/verifier.py` | `InvariantVerifier` | Pre-flight AST syntax & dangerous bash command guards |
-| `ketan/causal_graph.py` | `KetanTraceGraph` | Live execution DAG + root cause failure explanation |
-| `ketan/epistemic.py` | `EpistemicBeliefEngine` | Belief tracking, contradiction detection, prompt pruning |
-| `ketan/adapters/` | `KetanAgentWrapper` | LangGraph + generic LLM adapter middleware |
-| `ketan/mcp/server.py` | FastMCP Server | Safe, transactional MCP tools via stdio transport |
-
 ---
 
 ## 🧪 Running Tests & Benchmarks
@@ -228,7 +207,7 @@ Add to `~/.claude/claude.json`:
 # Run unit test suite
 uv run pytest tests/
 
-# Run empirical performance benchmark suite
+# Run performance benchmark suite
 uv run python examples/benchmark_ketan_performance.py
 ```
 

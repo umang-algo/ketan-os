@@ -112,8 +112,10 @@ class KetanHarness:
             self._last_ctg_node = tool_node
 
             # Step 1: Pre-flight Verification
-            pre_results = self.verifier.verify_pre_flight(tool_name, tool_args)
+            effective_args = {"workspace_root": self.workspace_dir, **tool_args}
+            pre_results = self.verifier.verify_pre_flight(tool_name, effective_args)
             failed_pre = [r for r in pre_results if not r.passed]
+
 
             if failed_pre:
                 failure_msg = f"Pre-flight assertion failed: {failed_pre[0].message}"

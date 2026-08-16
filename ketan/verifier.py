@@ -1,6 +1,8 @@
 import ast
 import inspect
+import os
 import re
+from pathlib import Path
 from typing import Callable, List, Dict, Any, Tuple, Optional
 
 
@@ -38,7 +40,55 @@ class InvariantVerifier:
     def _register_default_rules(self):
         """Registers essential built-in safety and correctness rules."""
         
-        # Rule 1: Python Syntax Validity (Pre-flight for file writes)
+        # Rule 1: Strict Canonical Workspace Path Isolation Guard
+        def check_path_isolation(payload: Dict[str, Any]) -> Tuple[bool, str, Optional[str]]:
+            workspace_root_str = payload.get("workspace_root") or payload.get("workspace_dir")
+            if not workspace_root_str:
+                return True, "Path isolation check skipped (no workspace_root payload).", None
+
+            ws_root = Path(workspace_root_str).resolve()
+            path_keys = ["filepath", "path", "dest", "source", "target", "file"]
+
+            for key in path_keys:
+                raw_path_val = payload.get(key)
+                if not raw_path_val or not isinstance(raw_path_val, str):
+                    continue
+
+                raw_path_str = raw_path_val.strip()
+                if not raw_path_str:
+                    continue
+
+                # Check path traversal markers
+                try:
+                    p = Path(raw_path_str)
+                    target_abs = (ws_root / p).resolve() if not p.is_absolute() else p.resolve()
+
+                    if not target_abs.is_relative_to(ws_root):
+                        return (
+                            False,
+                            f"Security path traversal violation in parameter '{key}': '{raw_path_str}' targets path '{target_abs}' outside workspace root '{ws_root}'.",
+                            f"Path confinement violation: File operations must target paths within workspace root '{ws_root}'."
+                        )
+
+                    # Symlink target inspection
+                    if target_abs.is_symlink():
+                        symlink_target = target_abs.readlink().resolve()
+                        if not symlink_target.is_relative_to(ws_root):
+                            return (
+                                False,
+                                f"Security symlink traversal violation in parameter '{key}': Symlink '{target_abs}' points to external path '{symlink_target}'.",
+                                f"Symlink safety violation: Symlinks pointing outside workspace root '{ws_root}' are forbidden."
+                            )
+                except Exception as ex:
+                    return (
+                        False,
+                        f"Malformed path argument in parameter '{key}': '{raw_path_str}' ({str(ex)})",
+                        "Provide a valid workspace-confined relative or absolute path."
+                    )
+
+            return True, "Path isolation check passed.", None
+
+        # Rule 2: Python Syntax Validity (Pre-flight for file writes)
         def check_python_syntax(payload: Dict[str, Any]) -> Tuple[bool, str, Optional[str]]:
             filepath = payload.get("filepath", "")
             content = payload.get("content", "")
@@ -53,7 +103,7 @@ class InvariantVerifier:
                     )
             return True, "Syntax check passed.", None
 
-        # Rule 2: Dangerous Shell Command Guard
+        # Rule 3: Dangerous Shell Command Guard (Guardrail)
         def check_dangerous_bash(payload: Dict[str, Any]) -> Tuple[bool, str, Optional[str]]:
             raw_cmd = payload.get("command", "").strip()
             if not raw_cmd:
@@ -69,7 +119,6 @@ class InvariantVerifier:
                 re.IGNORECASE
             )
             if destructive_rm_regex.search(normalized) or "--no-preserve-root" in norm_lower:
-
                 return (
                     False,
                     f"Dangerous destructive filesystem command detected in '{raw_cmd}'.",
@@ -110,10 +159,9 @@ class InvariantVerifier:
                     "Do not pipe untrusted remote scripts or encoded payloads into shell execution."
                 )
 
-
             return True, "Bash safety check passed.", None
 
-
+        self.register_pre_flight_rule("path_isolation_guard", check_path_isolation)
         self.register_pre_flight_rule("python_syntax_guard", check_python_syntax)
         self.register_pre_flight_rule("dangerous_command_guard", check_dangerous_bash)
 

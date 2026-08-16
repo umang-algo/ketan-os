@@ -101,6 +101,13 @@ class KetanShadowFS:
             pass
 
     def _should_ignore(self, path: Path) -> bool:
+        try:
+            resolved = path.resolve()
+            if not resolved.is_relative_to(self.target_dir):
+                return True
+        except Exception:
+            return True
+
         for part in path.parts:
             if part in self.ignore_patterns or part.startswith(".ketan") or part.startswith(".chronos"):
                 return True
@@ -120,8 +127,11 @@ class KetanShadowFS:
                     abs_path = root_path / file_name
                     if self._should_ignore(abs_path):
                         continue
-                    rel_path = str(abs_path.relative_to(self.target_dir))
-                    states[rel_path] = FileState(rel_path, abs_path)
+                    try:
+                        rel_path = str(abs_path.relative_to(self.target_dir))
+                        states[rel_path] = FileState(rel_path, abs_path)
+                    except ValueError:
+                        continue
                     
             return states
 
@@ -162,8 +172,9 @@ class KetanShadowFS:
 
     def rollback_to(self, snapshot_id: str) -> Dict[str, str]:
         """
-        Reverts the target workspace back to the exact physical state of snapshot_id.
-        Returns a dict summarizing modified, created, and restored files.
+        Reverts the target workspace back to the physical state of snapshot_id.
+        Phase 1: Validates diffs & path confinement.
+        Phase 2: Performs clean restoration.
         """
         with self._lock:
             if snapshot_id not in self.snapshots:
@@ -173,12 +184,21 @@ class KetanShadowFS:
             current_states = self.scan_state()
             diff = target_snap.get_diff(current_states)
             
-            # 1. Remove files created after the snapshot was taken
+            # Phase 1: Pre-validation of path confinement
+            validated_diff = {}
             for rel_path, status in diff.items():
+                target_file = (self.target_dir / rel_path).resolve()
+                if not target_file.is_relative_to(self.target_dir):
+                    continue
+                validated_diff[rel_path] = status
+
+            # Phase 2: Restoration execution
+            # 1. Remove files created after the snapshot was taken
+            for rel_path, status in validated_diff.items():
                 if status == "CREATED":
                     abs_p = self.target_dir / rel_path
-                    if abs_p.exists():
-                        if abs_p.is_dir():
+                    if abs_p.exists() or abs_p.is_symlink():
+                        if abs_p.is_dir() and not abs_p.is_symlink():
                             shutil.rmtree(abs_p)
                         else:
                             abs_p.unlink()
@@ -188,7 +208,7 @@ class KetanShadowFS:
                                 parent = parent.parent
 
             # 2. Restore modified or deleted files from blob store or backup dir
-            for rel_path, status in diff.items():
+            for rel_path, status in validated_diff.items():
                 if status in ("MODIFIED", "DELETED"):
                     target_file = self.target_dir / rel_path
                     old_st = target_snap.file_states.get(rel_path)
@@ -200,13 +220,16 @@ class KetanShadowFS:
                         
                         if source_file.exists():
                             target_file.parent.mkdir(parents=True, exist_ok=True)
+                            if target_file.is_symlink():
+                                target_file.unlink()
                             shutil.copy2(source_file, target_file)
-                        elif target_file.exists():
+                        elif target_file.exists() or target_file.is_symlink():
                             target_file.unlink()
-                    elif target_file.exists():
+                    elif target_file.exists() or target_file.is_symlink():
                         target_file.unlink()
 
-            return diff
+            return validated_diff
+
 
     def delete_snapshot(self, snapshot_id: str):
         """Purges snapshot metadata and backup directory from disk."""
