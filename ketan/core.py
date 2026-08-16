@@ -4,7 +4,7 @@ import logging
 from typing import List, Dict, Any, Optional, Callable, Tuple
 
 from ketan.shadow_fs import KetanShadowFS
-from ketan.dual_ledger import KetanLedger, Checkpoint
+from ketan.dual_ledger import KetanLedger, Checkpoint, ReversibilityKind
 from ketan.verifier import InvariantVerifier, InvariantResult
 from ketan.causal_graph import KetanTraceGraph, CausalNode, NodeKind, NodeStatus
 from ketan.epistemic import EpistemicBeliefEngine, ContradictionEvent
@@ -24,9 +24,11 @@ class KetanHarness:
     """
     Ketan-OS Harness (केतन — Beacon of Ground Truth).
 
-    Provides sub-second snapshotting, pre-flight assertion verification,
-    Epistemic belief graph tracking, Causal Trace Graph lineage,
-    and automatic time-travel state rollback.
+    The Transactional Runtime for AI Agents.
+    Provides content-addressed state snapshotting, canonical path isolation,
+    pre-flight assertion verification, Epistemic belief graph tracking,
+    Causal Execution Provenance lineage, compensation action execution,
+    and workspace state rollback.
 
     Thread-safe: protected by internal RLock.
     """
@@ -43,22 +45,40 @@ class KetanHarness:
         self.causal_graph = KetanTraceGraph()
         self.epistemic_engine = EpistemicBeliefEngine()
         
+        # Compensation Engine Handlers (tool_name -> Callable(tool_args, tool_result))
+        self.compensation_handlers: Dict[str, Callable[[Dict[str, Any], Any], None]] = {}
+
         self.max_rollback_attempts = max_rollback_attempts
         self.rollback_counts: Dict[str, int] = {}
         self.current_step = 0
         self._last_ctg_node: Optional[CausalNode] = None
         self._lock = threading.RLock()
 
+    def register_compensation_action(
+        self,
+        tool_name: str,
+        compensate_fn: Callable[[Dict[str, Any], Any], None]
+    ):
+        """
+        Registers a compensation handler function for COMPENSATABLE tools.
+        When a transaction containing a COMPENSATABLE tool call is rolled back,
+        Ketan-OS invokes compensate_fn(tool_args, tool_result) to undo side effects (e.g. DB writes, Git reverts).
+        """
+        with self._lock:
+            self.compensation_handlers[tool_name] = compensate_fn
+            logger.info(f"[Ketan-OS Compensation Engine] Registered handler for tool '{tool_name}'")
+
     def create_checkpoint(
         self,
         prompt_stack: List[Dict[str, Any]],
         tool_calls: Optional[List[Dict[str, Any]]] = None,
-        custom_state: Optional[Dict[str, Any]] = None
+        custom_state: Optional[Dict[str, Any]] = None,
+        reversibility: ReversibilityKind = ReversibilityKind.REVERSIBLE
     ) -> Checkpoint:
         """
-        Creates an atomic checkpoint across both Ledgers:
-        1. Takes sub-second filesystem snapshot.
-        2. Records conversation prompt state & metadata in KetanLedger.
+        Creates a synchronized checkpoint across both Ledgers:
+        1. Takes incremental workspace snapshot.
+        2. Records conversation prompt state, tool calls, and reversibility metadata in KetanLedger.
         """
         with self._lock:
             self.current_step += 1
@@ -74,6 +94,7 @@ class KetanHarness:
                 tool_calls=tool_calls,
                 custom_state=custom_state
             )
+            cp.turn.reversibility = reversibility
 
             ctg_node = self.causal_graph.record_checkpoint(
                 checkpoint_id=checkpoint_id,
@@ -82,7 +103,7 @@ class KetanHarness:
             )
             self._last_ctg_node = ctg_node
 
-            logger.info(f"[Ketan-OS] Created Atomic Checkpoint '{checkpoint_id}' at Step {self.current_step}")
+            logger.info(f"[Ketan-OS] Created Checkpoint '{checkpoint_id}' at Step {self.current_step}")
             return cp
 
     def execute_tool_transactional(
@@ -91,11 +112,12 @@ class KetanHarness:
         tool_args: Dict[str, Any],
         tool_fn: Callable[[Dict[str, Any]], Any],
         prompt_stack: List[Dict[str, Any]],
-        current_checkpoint: Checkpoint
+        current_checkpoint: Checkpoint,
+        reversibility: ReversibilityKind = ReversibilityKind.REVERSIBLE
     ) -> Tuple[bool, Any, Optional[str]]:
         """
         Executes a tool within a transactional Ketan-OS boundary:
-        1. Runs Pre-flight Invariant Verification.
+        1. Evaluates Pre-flight Invariant Verification (including path confinement & safety guards).
         2. If Pre-flight fails: cancels execution, triggers rollback to current_checkpoint.
         3. Runs tool_fn.
         4. Inspects observation with Epistemic Belief Engine to detect contradictions.
@@ -103,6 +125,7 @@ class KetanHarness:
         6. If Post-flight fails: triggers rollback to current_checkpoint.
         """
         with self._lock:
+            current_checkpoint.turn.reversibility = reversibility
             tool_node = self.causal_graph.record_tool_call(
                 tool_name=tool_name,
                 args=tool_args,
@@ -115,7 +138,6 @@ class KetanHarness:
             effective_args = {"workspace_root": self.workspace_dir, **tool_args}
             pre_results = self.verifier.verify_pre_flight(tool_name, effective_args)
             failed_pre = [r for r in pre_results if not r.passed]
-
 
             if failed_pre:
                 failure_msg = f"Pre-flight assertion failed: {failed_pre[0].message}"
@@ -200,10 +222,11 @@ class KetanHarness:
         counterfactual_hint: str
     ) -> List[Dict[str, Any]]:
         """
-        Performs sub-second time-travel rollback:
-        1. Reverts filesystem to target_checkpoint_id snapshot.
-        2. Truncates prompt stack to checkpoint step.
-        3. Appends counterfactual diagnostic hint to prompt stack.
+        Performs transaction recovery:
+        1. Reverts workspace filesystem to target_checkpoint_id snapshot.
+        2. Executes registered compensation actions for COMPENSATABLE operations.
+        3. Flags IRREVERSIBLE side effects.
+        4. Truncates prompt stack to checkpoint step and appends counterfactual hint.
         """
         with self._lock:
             cp = self.ledger.get_checkpoint(target_checkpoint_id)
@@ -220,15 +243,35 @@ class KetanHarness:
                 )
 
             logger.info(
-                f"[Ketan-OS TIME-TRAVEL ROLLBACK] Reverting to Checkpoint "
+                f"[Ketan-OS ROLLBACK] Reverting to Checkpoint "
                 f"'{target_checkpoint_id}' (Step {cp.step_number}). "
                 f"Attempt {attempts}/{self.max_rollback_attempts}"
             )
 
+            # Phase 1: Workspace Filesystem Recovery
             actions = self.shadow_fs.rollback_to(cp.fs_snapshot_id)
 
-            self.ledger.truncate_to(target_checkpoint_id)
+            # Phase 2: Truncate Ledger & Execute Compensation Actions
+            pruned_cps = self.ledger.truncate_to(target_checkpoint_id)
+            executed_compensations = []
+            irreversible_warnings = []
 
+            for p_cp in pruned_cps:
+                for tc in p_cp.turn.tool_calls:
+                    t_name = tc.get("name") or tc.get("tool_name")
+                    t_args = tc.get("args") or tc.get("tool_args") or {}
+                    
+                    if p_cp.turn.reversibility == ReversibilityKind.COMPENSATABLE and t_name in self.compensation_handlers:
+                        try:
+                            self.compensation_handlers[t_name](t_args, None)
+                            executed_compensations.append(f"Executed compensation for '{t_name}'")
+                            logger.info(f"[Ketan-OS Compensation] Executed compensation for tool '{t_name}'")
+                        except Exception as ex:
+                            logger.error(f"[Ketan-OS Compensation Error] Failed compensation for '{t_name}': {str(ex)}")
+                    elif p_cp.turn.reversibility == ReversibilityKind.IRREVERSIBLE:
+                        irreversible_warnings.append(f"Tool '{t_name}' performed IRREVERSIBLE side effects (external API call).")
+
+            # Phase 3: Provenance & Counterfactual System Hint Generation
             rb_node = self.causal_graph.record_rollback(
                 to_checkpoint_id=target_checkpoint_id,
                 step=self.current_step,
@@ -246,16 +289,27 @@ class KetanHarness:
             failures = self.causal_graph.find_all_failures()
             root_cause_explanation = ""
             if failures:
-                root_cause_explanation = "\n[CTG Root Cause]:\n" + self.causal_graph.explain_failure(failures[-1].node_id)
+                root_cause_explanation = "\n[CTG Provenance Lineage]:\n" + self.causal_graph.explain_failure(failures[-1].node_id)
+
+            comp_summary = ""
+            if executed_compensations:
+                comp_summary = "\n[Executed Compensations]:\n" + "\n".join(f" - {c}" for c in executed_compensations)
+
+            irrev_summary = ""
+            if irreversible_warnings:
+                irrev_summary = "\n⚠️ [Irreversible Actions Warning]:\n" + "\n".join(f" - {w}" for w in irreversible_warnings)
 
             counterfactual_system_msg = {
                 "role": "system",
                 "content": (
-                    f"⚠️ [KETAN-OS TIME-TRAVEL ROLLBACK TRIGGERED AT STEP {cp.step_number}]\n"
+                    f"⚠️ [KETAN-OS TRANSACTION ROLLBACK AT STEP {cp.step_number}]\n"
                     f"Reason: {reason}\n"
                     f"Counterfactual Instruction: {counterfactual_hint}\n"
+                    f"Reverted Files: {len(actions)} files restored\n"
+                    f"{comp_summary}"
+                    f"{irrev_summary}\n"
                     f"{root_cause_explanation}\n"
-                    f"The environment has been cleanly reverted to Step {cp.step_number} state. "
+                    f"The workspace environment has been reverted to Step {cp.step_number} state. "
                     f"Do NOT repeat the failed action. Choose an alternate clean strategy."
                 )
             }

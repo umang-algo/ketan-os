@@ -2,10 +2,11 @@
 Ketan-OS (केतन — The Beacon of Ground Truth).
 
 The Transactional Intelligence Substrate & Time-Travel Harness for AI Agents.
-Brings sub-second content-addressed state snapshotting & atomic rollback,
+Brings content-addressed workspace state snapshotting & rollback,
 multi-layer pre-flight assertion verification, live causal execution trace graph (CTG) lineage,
 and epistemic belief contradiction prompt stack pruning.
 """
+
 
 from ketan.core import KetanHarness, Checkpoint, RollbackException, ChronosHarness
 from ketan.shadow_fs import KetanShadowFS, ShadowFS, FileState, ShadowSnapshot
