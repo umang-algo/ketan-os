@@ -5,10 +5,13 @@ Prevents epistemic drift and hallucination loops by tracking explicit factual/st
 beliefs. When new tool execution results or file mutations contradict prior beliefs,
 the Epistemic Engine automatically prunes invalid prompt lines and triggers counterfactual
 state rewinds to verified ground truth.
+
+Thread-safe and supports type coercion for robust contradiction detection.
 """
 
 import time
 import re
+import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Optional, Tuple, Any
 
@@ -42,18 +45,50 @@ class ContradictionEvent:
     timestamp:        float = field(default_factory=time.time)
 
 
+def _values_are_equivalent(val1: Any, val2: Any) -> bool:
+    """
+    Checks semantic equivalence between two values, handling string/numeric/boolean coercions.
+    Prevents false-positive contradictions (e.g. "1" != 1 or "true" != True).
+    """
+    if val1 == val2:
+        return True
+    
+    # Check string coercions
+    s1 = str(val1).strip()
+    s2 = str(val2).strip()
+    if s1 == s2:
+        return True
+    
+    # Check boolean coercions
+    if s1.lower() in ("true", "1") and s2.lower() in ("true", "1"):
+        return True
+    if s1.lower() in ("false", "0") and s2.lower() in ("false", "0"):
+        return True
+
+    # Check numeric coercions
+    try:
+        if float(s1) == float(s2):
+            return True
+    except (ValueError, TypeError):
+        pass
+
+    return False
+
+
 class EpistemicBeliefEngine:
     """
     Ketan-OS Epistemic Belief Engine (केतन).
 
     Monitors incoming LLM prompts and tool results for structural/logical assumptions.
     Maintains a temporal belief graph, detects contradictions, and prunes stale memory.
+    Thread-safe synchronization.
     """
 
     def __init__(self):
         self.beliefs: Dict[str, BeliefNode] = {}
         self.contradictions: List[ContradictionEvent] = []
         self._belief_counter = 0
+        self._lock = threading.RLock()
 
     def assert_belief(
         self,
@@ -64,19 +99,20 @@ class EpistemicBeliefEngine:
         confidence: float = 1.0
     ) -> BeliefNode:
         """Explicitly registers a belief node in the epistemic graph."""
-        self._belief_counter += 1
-        belief_id = f"b_{self._belief_counter}_{int(time.time()*1000)}"
-        node = BeliefNode(
-            belief_id=belief_id,
-            subject=subject,
-            predicate=predicate,
-            object_val=object_val,
-            confidence=confidence,
-            source_step=source_step,
-            is_valid=True
-        )
-        self.beliefs[belief_id] = node
-        return node
+        with self._lock:
+            self._belief_counter += 1
+            belief_id = f"b_{self._belief_counter}_{int(time.time()*1000)}"
+            node = BeliefNode(
+                belief_id=belief_id,
+                subject=subject,
+                predicate=predicate,
+                object_val=object_val,
+                confidence=confidence,
+                source_step=source_step,
+                is_valid=True
+            )
+            self.beliefs[belief_id] = node
+            return node
 
     def inspect_observation(
         self,
@@ -88,30 +124,31 @@ class EpistemicBeliefEngine:
     ) -> List[ContradictionEvent]:
         """
         Compares an empirical observation against active beliefs.
-        If a contradiction is detected, the belief is marked invalid and a ContradictionEvent is emitted.
+        If a contradiction is detected (with type coercion), the belief is marked invalid and a ContradictionEvent is emitted.
         """
-        detected_contradictions: List[ContradictionEvent] = []
+        with self._lock:
+            detected_contradictions: List[ContradictionEvent] = []
 
-        for node in list(self.beliefs.values()):
-            if not node.is_valid:
-                continue
+            for node in list(self.beliefs.values()):
+                if not node.is_valid:
+                    continue
 
-            if node.subject == subject and node.predicate == predicate:
-                if node.object_val != observed_val:
-                    # Contradiction detected!
-                    node.is_valid = False
-                    event = ContradictionEvent(
-                        belief_id=node.belief_id,
-                        subject=subject,
-                        expected_value=node.object_val,
-                        observed_value=observed_val,
-                        refuting_source=refuting_source,
-                        step_number=step_number
-                    )
-                    self.contradictions.append(event)
-                    detected_contradictions.append(event)
+                if node.subject == subject and node.predicate == predicate:
+                    if not _values_are_equivalent(node.object_val, observed_val):
+                        # Contradiction detected!
+                        node.is_valid = False
+                        event = ContradictionEvent(
+                            belief_id=node.belief_id,
+                            subject=subject,
+                            expected_value=node.object_val,
+                            observed_value=observed_val,
+                            refuting_source=refuting_source,
+                            step_number=step_number
+                        )
+                        self.contradictions.append(event)
+                        detected_contradictions.append(event)
 
-        return detected_contradictions
+            return detected_contradictions
 
     def prune_prompt_stack(
         self,
@@ -119,43 +156,49 @@ class EpistemicBeliefEngine:
         contradictions: List[ContradictionEvent]
     ) -> Tuple[List[Dict[str, Any]], List[str]]:
         """
-        Scans a prompt stack and prunes/revises messages that contain invalid belief statements.
+        Scans a prompt stack and revises messages that contain invalid belief statements.
+        Appends targeted epistemic correction hints while preserving existing prompt text.
         Returns (pruned_prompt_stack, list_of_pruned_reasons).
         """
-        if not contradictions:
-            return prompt_stack, []
+        with self._lock:
+            if not contradictions:
+                return prompt_stack, []
 
-        pruned_stack = []
-        reasons = []
+            pruned_stack = []
+            reasons = []
 
-        for msg in prompt_stack:
-            content = str(msg.get("content", ""))
-            should_prune = False
-            prune_reason = ""
+            for msg in prompt_stack:
+                content = str(msg.get("content", ""))
+                should_prune = False
+                prune_reasons_for_msg = []
 
-            for c in contradictions:
-                # Search for mentions of the contradicted subject in prompt text
-                if c.subject in content and str(c.expected_value) in content:
-                    should_prune = True
-                    prune_reason = f"Pruned stale belief regarding '{c.subject}': expected '{c.expected_value}', but observed '{c.observed_value}'"
-                    break
+                for c in contradictions:
+                    # Search for mentions of the contradicted subject in prompt text
+                    if c.subject in content and str(c.expected_value) in content:
+                        should_prune = True
+                        reason_text = f"Pruned stale belief regarding '{c.subject}': expected '{c.expected_value}', but observed '{c.observed_value}'"
+                        prune_reasons_for_msg.append(reason_text)
+                        reasons.append(reason_text)
 
-            if should_prune:
-                reasons.append(prune_reason)
-                # Replace with an explicit epistemic correction hint
-                corrected_msg = dict(msg)
-                corrected_msg["content"] = f"[EPISTEMIC CORRECTION] {prune_reason}. DO NOT use outdated assumption."
-                pruned_stack.append(corrected_msg)
-            else:
-                pruned_stack.append(msg)
+                if should_prune:
+                    corrected_msg = dict(msg)
+                    correction_suffix = "\n\n" + "\n".join(
+                        f"[EPISTEMIC CORRECTION] {r}. DO NOT use outdated assumption." for r in prune_reasons_for_msg
+                    )
+                    corrected_msg["content"] = content + correction_suffix
+                    pruned_stack.append(corrected_msg)
+                else:
+                    pruned_stack.append(msg)
 
-        return pruned_stack, reasons
+            return pruned_stack, reasons
 
     def active_beliefs(self) -> List[BeliefNode]:
-        return [b for b in self.beliefs.values() if b.is_valid]
+        with self._lock:
+            return [b for b in self.beliefs.values() if b.is_valid]
 
     def invalid_beliefs(self) -> List[BeliefNode]:
-        return [b for b in self.beliefs.values() if not b.is_valid]
+        with self._lock:
+            return [b for b in self.beliefs.values() if not b.is_valid]
 
     # ------------------------------------------------------------------
     # MCP / External Adapter Convenience Methods
@@ -168,21 +211,22 @@ class EpistemicBeliefEngine:
         ContradictionEvent and marks the prior belief invalid.
         If no contradiction, asserts the new belief.
         """
-        events = self.inspect_observation(
-            subject=node.subject,
-            predicate=node.predicate,
-            observed_val=node.object_val,
-        )
-        if events:
-            return events[0]
-        # No contradiction — register as a new belief
-        self.assert_belief(
-            subject=node.subject,
-            predicate=node.predicate,
-            object_val=node.object_val,
-            confidence=node.confidence,
-        )
-        return None
+        with self._lock:
+            events = self.inspect_observation(
+                subject=node.subject,
+                predicate=node.predicate,
+                observed_val=node.object_val,
+            )
+            if events:
+                return events[0]
+            # No contradiction — register as a new belief
+            self.assert_belief(
+                subject=node.subject,
+                predicate=node.predicate,
+                object_val=node.object_val,
+                confidence=node.confidence,
+            )
+            return None
 
     def observe_raw(
         self,
@@ -194,11 +238,12 @@ class EpistemicBeliefEngine:
         """
         Shorthand for observe() using plain arguments instead of a BeliefNode.
         """
-        node = BeliefNode(
-            belief_id="",
-            subject=subject,
-            predicate=predicate,
-            object_val=value,
-            confidence=confidence,
-        )
-        return self.observe(node)
+        with self._lock:
+            node = BeliefNode(
+                belief_id="",
+                subject=subject,
+                predicate=predicate,
+                object_val=value,
+                confidence=confidence,
+            )
+            return self.observe(node)

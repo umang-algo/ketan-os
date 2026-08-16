@@ -1,6 +1,8 @@
 import ast
 import inspect
+import re
 from typing import Callable, List, Dict, Any, Tuple, Optional
+
 
 class InvariantResult:
     """Result of an invariant verification check in Ketan-OS."""
@@ -53,16 +55,64 @@ class InvariantVerifier:
 
         # Rule 2: Dangerous Shell Command Guard
         def check_dangerous_bash(payload: Dict[str, Any]) -> Tuple[bool, str, Optional[str]]:
-            command = payload.get("command", "").strip()
-            dangerous_tokens = ["rm -rf /", "rm -rf ~", ":(){ :|:& };:", "dd if=/dev/zero"]
-            for token in dangerous_tokens:
-                if token in command:
+            raw_cmd = payload.get("command", "").strip()
+            if not raw_cmd:
+                return True, "Bash safety check passed.", None
+
+            # Normalize whitespace and lowercase for token checking
+            normalized = " ".join(raw_cmd.split())
+            norm_lower = normalized.lower()
+
+            # 1. Destructive deletion patterns (rm -rf /, rm -rf ~, rm -rf $HOME, rm -rf /*, etc.)
+            destructive_rm_regex = re.compile(
+                r'\brm\s+-[a-zA-Z]*r[a-zA-Z]*\s+(/|\/\*|~|~\/\*|\$home|\$home\/\*|\.|\.\.|\.\/\*|--no-preserve-root)(\s+|$)',
+                re.IGNORECASE
+            )
+            if destructive_rm_regex.search(normalized) or "--no-preserve-root" in norm_lower:
+
+                return (
+                    False,
+                    f"Dangerous destructive filesystem command detected in '{raw_cmd}'.",
+                    "Avoid destructive commands targeting root, home, or workspace boundaries."
+                )
+
+            # 2. Raw device formatting & disk overwrite
+            disk_wipe_regex = re.compile(
+                r'\b(dd\s+if=/dev/(zero|urandom|null)|mkfs(\.[a-z0-9]+)?|fdisk|parted|shred|sfdisk)\b',
+                re.IGNORECASE
+            )
+            if disk_wipe_regex.search(normalized) or "/dev/sd" in norm_lower or "/dev/hd" in norm_lower or "/dev/nvme" in norm_lower:
+                return (
+                    False,
+                    f"Dangerous raw disk/device operation detected in '{raw_cmd}'.",
+                    "Direct disk partition/wipe operations are blocked for security."
+                )
+
+            # 3. System state alteration, shutdown, and fork bombs
+            system_kill_tokens = [":(){ :|:& };:", "shutdown", "reboot", "poweroff", "init 0", "halt"]
+            for token in system_kill_tokens:
+                if token in normalized:
                     return (
                         False,
-                        f"Dangerous shell command detected containing '{token}'.",
-                        "Avoid destructive system commands. Use targeted file operations instead."
+                        f"Dangerous system shutdown/forkbomb command detected containing '{token}'.",
+                        "System state alteration commands are strictly forbidden."
                     )
+
+            # 4. Obfuscated shell execution and remote execution piping (base64 -d | sh, curl | bash)
+            obfuscated_exec_regex = re.compile(
+                r'\b(base64\s+(-d|--decode)|curl|wget)\b.*\|\s*(sh|bash|zsh|python)\b',
+                re.IGNORECASE
+            )
+            if obfuscated_exec_regex.search(normalized):
+                return (
+                    False,
+                    f"Dangerous obfuscated execution or remote piping detected in '{raw_cmd}'.",
+                    "Do not pipe untrusted remote scripts or encoded payloads into shell execution."
+                )
+
+
             return True, "Bash safety check passed.", None
+
 
         self.register_pre_flight_rule("python_syntax_guard", check_python_syntax)
         self.register_pre_flight_rule("dangerous_command_guard", check_dangerous_bash)

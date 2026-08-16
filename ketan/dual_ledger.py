@@ -1,4 +1,5 @@
 import time
+import threading
 from typing import List, Dict, Any, Optional
 
 class ExecutionTurn:
@@ -55,10 +56,13 @@ class KetanLedger:
     Manages dual-ledger state synchronization in Ketan-OS:
     - Ledger A: Environment state & filesystem snapshots
     - Ledger B: LLM conversation prompt stack & turn records
+    
+    Thread-safe synchronization using internal RLock.
     """
     def __init__(self):
         self.checkpoints: Dict[str, Checkpoint] = {}
         self.history: List[Checkpoint] = []
+        self._lock = threading.RLock()
 
     def record_checkpoint(
         self,
@@ -70,55 +74,59 @@ class KetanLedger:
         custom_state: Optional[Dict[str, Any]] = None
     ) -> Checkpoint:
         """Records a synchronized checkpoint across both ledgers."""
-        turn = ExecutionTurn(
-            turn_id=f"turn_{checkpoint_id}",
-            step_number=step_number,
-            prompt_snapshot=prompt_stack,
-            tool_calls=tool_calls
-        )
-        
-        cp = Checkpoint(
-            checkpoint_id=checkpoint_id,
-            step_number=step_number,
-            turn=turn,
-            fs_snapshot_id=fs_snapshot_id,
-            state_data=custom_state
-        )
-        
-        self.checkpoints[checkpoint_id] = cp
-        self.history.append(cp)
-        return cp
+        with self._lock:
+            turn = ExecutionTurn(
+                turn_id=f"turn_{checkpoint_id}",
+                step_number=step_number,
+                prompt_snapshot=prompt_stack,
+                tool_calls=tool_calls
+            )
+            
+            cp = Checkpoint(
+                checkpoint_id=checkpoint_id,
+                step_number=step_number,
+                turn=turn,
+                fs_snapshot_id=fs_snapshot_id,
+                state_data=custom_state
+            )
+            
+            self.checkpoints[checkpoint_id] = cp
+            self.history.append(cp)
+            return cp
 
     def get_checkpoint(self, checkpoint_id: str) -> Optional[Checkpoint]:
-        return self.checkpoints.get(checkpoint_id)
+        with self._lock:
+            return self.checkpoints.get(checkpoint_id)
 
     def truncate_to(self, checkpoint_id: str) -> List[Checkpoint]:
         """
         Truncates history to a target checkpoint (pruning invalid future steps).
         Returns the list of pruned checkpoints.
         """
-        if checkpoint_id not in self.checkpoints:
-            raise KeyError(f"Checkpoint '{checkpoint_id}' not found in KetanLedger.")
-            
-        target_index = -1
-        for i, cp in enumerate(self.history):
-            if cp.checkpoint_id == checkpoint_id:
-                target_index = i
-                break
+        with self._lock:
+            if checkpoint_id not in self.checkpoints:
+                raise KeyError(f"Checkpoint '{checkpoint_id}' not found in KetanLedger.")
                 
-        if target_index == -1:
-            return []
+            target_index = -1
+            for i, cp in enumerate(self.history):
+                if cp.checkpoint_id == checkpoint_id:
+                    target_index = i
+                    break
+                    
+            if target_index == -1:
+                return []
 
-        pruned = self.history[target_index + 1:]
-        self.history = self.history[:target_index + 1]
-        
-        for cp in pruned:
-            self.checkpoints.pop(cp.checkpoint_id, None)
+            pruned = self.history[target_index + 1:]
+            self.history = self.history[:target_index + 1]
             
-        return pruned
+            for cp in pruned:
+                self.checkpoints.pop(cp.checkpoint_id, None)
+                
+            return pruned
 
     def latest_checkpoint(self) -> Optional[Checkpoint]:
-        return self.history[-1] if self.history else None
+        with self._lock:
+            return self.history[-1] if self.history else None
 
 
 # Alias for backward compatibility

@@ -42,3 +42,7 @@ ketan-mcp = "ketan.mcp.server:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ketan*", "chronos*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+

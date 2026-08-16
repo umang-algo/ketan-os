@@ -3,7 +3,9 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-67%20passed-brightgreen.svg)](tests/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Tests](https://img.shields.io/badge/tests-73%20passed-brightgreen.svg)](tests/)
 [![MCP](https://img.shields.io/badge/Claude%20Code-MCP%20Ready-blueviolet.svg)](examples/claude_code_mcp/)
 
 ---
@@ -18,9 +20,9 @@
 
 **Ketan (केतन)** literally means *Banner, Beacon, or Dwelling* in Sanskrit — the fixed, unmovable point of reference from which all navigation begins. In the context of AI agents, Ketan-OS is that **beacon of ground truth**: the substrate that ensures an agent's environment, memory, and decisions are always anchored to verifiable, uncorrupted reality.
 
-Modern AI agent frameworks (LangGraph, AutoGen, CrewAI) are powerful orchestration layers — but they are blind to **what is actually happening on disk and in memory**. When an agent writes a malformed file, executes a destructive command, or hallucinates a state that no longer exists, these frameworks have no recovery mechanism. The environment corrupts silently and irrecoverably.
+Modern AI agent frameworks (LangGraph, AutoGen, CrewAI, Claude Code) are powerful orchestration layers — but they are blind to **what is actually happening on disk and in memory**. When an agent writes a malformed file, executes a destructive command, or hallucinates a state that no longer exists, these frameworks have no recovery mechanism. The environment corrupts silently and irrecoverably.
 
-**Ketan-OS solves this at the substrate level** — not by patching agents, but by wrapping every tool call in transactional guarantees, sub-second snapshot/rollback, pre-flight invariant verification, live causal tracing, and epistemic contradiction detection. It is the OS beneath the agent, not the agent itself.
+**Ketan-OS solves this at the substrate level** — not by competing with agent frameworks, but by serving as an effortless plug-and-play transactional layer beneath them. Wrapping tool calls in atomic snapshot/rollback, multi-layer pre-flight guards, live causal tracing, and epistemic contradiction pruning, Ketan-OS makes agent tool execution safe, reversible, and debuggable.
 
 ---
 
@@ -28,17 +30,18 @@ Modern AI agent frameworks (LangGraph, AutoGen, CrewAI) are powerful orchestrati
 
 | Capability | LangGraph | AutoGen | CrewAI | **Ketan-OS 🪔** | **What Ketan-OS Does** |
 |:---|:---:|:---:|:---:|:---:|:---|
-| **Environment Filesystem Snapshotting** | ❌ | ❌ | ❌ | ✅ **Sub-Second ShadowFS** | Before every tool call, Ketan-OS takes an incremental, content-addressed snapshot of the entire workspace filesystem using `KetanShadowFS`. Stores only changed bytes with LRU eviction. Average snapshot time: **8ms for 1,000 files**. |
-| **Time-Travel Substrate Rollback** | ❌ | ❌ | ❌ | ✅ **Sub-Second Atomic** | On any failure — crash, invariant violation, syntax error, bad output — the workspace is reverted byte-for-byte to the last clean checkpoint in **< 10ms**. No partial writes, no corrupted state. The agent gets a counterfactual hint explaining what went wrong. |
-| **Pre-Flight Invariant Assertion Guards** | ❌ | ❌ | ❌ | ✅ **AST + Rule Engine** | Before a tool executes, Ketan-OS runs pluggable assertion rules: Python AST syntax validation (blocks broken `.py` files from ever touching disk), financial bounds checking, path safety guards, and custom user-defined rules. Tool is **blocked before execution** if any rule fails. |
+| **Environment Filesystem Snapshotting** | ❌ | ❌ | ❌ | ✅ **Sub-Second ShadowFS** | Before every tool call, Ketan-OS takes an incremental, content-addressed snapshot of the entire workspace using `KetanShadowFS`. Stores unique file blobs by hash. Average snapshot time: **0.76ms for 1,000 files**. |
+| **Time-Travel Substrate Rollback** | ❌ | ❌ | ❌ | ✅ **Sub-Second Atomic** | On any failure — crash, invariant violation, syntax error, bad output — the workspace is reverted byte-for-byte to the last clean checkpoint in **1.21ms**. No partial writes, no corrupted state. The agent gets a counterfactual hint explaining what went wrong. |
+| **Pre-Flight Invariant Assertion Guards** | ❌ | ❌ | ❌ | ✅ **Multi-Layer Guard Engine** | Before a tool executes, Ketan-OS runs multi-layer guard rules: Python AST syntax validation, dangerous command detection (root/HOME wipes, raw disk writes, fork bombs, obfuscated pipes), path safety bounds, and custom rules. Tool is **blocked before execution** if any rule fails. |
 | **Live Causal Execution Trace Graph (CTG)** | ❌ | ❌ | ❌ | ✅ **Live DAG Lineage** | Every tool call, checkpoint, failure, and rollback is recorded as a node in a directed acyclic graph (DAG). The CTG tracks causal edges — which action led to which outcome. On failure, Ketan-OS traverses the DAG backwards to generate a **root cause explanation** automatically. |
-| **Epistemic Belief Engine & Memory Pruner** | ❌ | ❌ | ❌ | ✅ **Contradiction-Aware** | Tracks explicit factual beliefs the agent holds about the workspace (e.g., "file X is valid Python"). When a new observation contradicts a prior belief (e.g., "file X now has a syntax error"), the contradiction is detected, the stale belief is marked invalid, and the relevant prompt stack entries are **auto-pruned** to prevent hallucination loops. |
+| **Epistemic Belief Engine & Memory Pruner** | ❌ | ❌ | ❌ | ✅ **Contradiction-Aware** | Tracks explicit factual beliefs the agent holds about the workspace (e.g., "file X is valid Python"). When a new observation contradicts a prior belief, semantic type coercion evaluates the change, invalidates the stale belief, and auto-prunes contradicted prompt assumptions to prevent hallucination loops. |
 | **eBPF-Style Symbolic Invariant Kernel** | ❌ | ❌ | ❌ | ✅ **Micro-Patching** | An in-process rule engine that evaluates temporal logic constraints on tool arguments in **sub-millisecond time** — inspired by Linux eBPF probes. Instead of just blocking, it can also **micro-patch** tool args in-flight (e.g., clamp an out-of-range financial amount to a safe value instead of rejecting it). |
 | **Predictive Speculative Task Kernel** | ❌ | ❌ | ❌ | ✅ **< 5ms Commit** | Runs multiple potential tool execution branches in parallel speculatively — like CPU branch prediction, but for AI workflows. The kernel selects and commits the best-outcome branch in < 5ms, discarding the rest. Reduces latency for long tool chains. |
 | **Scope-Locked Policy Engine (RBAC)** | ❌ | ❌ | ❌ | ✅ **Declarative RBAC** | Declarative role-based access control for tools. Define which agent roles can call which tools, which file paths they can write to, and what argument ranges are allowed. Policies are enforced at the substrate level — the agent cannot bypass them. |
-| **JIT Skill Trajectory Compilation** | ❌ | ❌ | ❌ | ✅ **Zero-Token Re-runs** | Compiles repeated agent skill sequences into cached, zero-token executors. If an agent runs the same workflow twice (e.g., "read orders → validate → process refund"), the 2nd run executes from a compiled cache with 0 LLM tokens consumed. |
+| **JIT Skill Trajectory Compilation** | ❌ | ❌ | ❌ | ✅ **Value-Sensitive Caching** | Compiles repeated agent skill sequences into cached, zero-token executors with parameter value matching. If an agent runs a repetitive tool sequence, future executions run from a compiled cache with 0 LLM tokens consumed. |
 | **Persona State Freeze, Fork & Diff** | ❌ | ❌ | ❌ | ✅ **Portable State** | Freeze the complete agent state (workspace + memory + conversation), fork it into parallel experiment branches, then diff what changed between branches. Enables A/B testing of agent strategies without any state contamination. |
-| **Claude Code MCP Integration** | ❌ | ❌ | ❌ | ✅ **15 MCP Tools** | Ships a full Model Context Protocol (MCP) server. Connect Ketan-OS to Claude Code in one config line — Claude gets all 15 Ketan-OS tools natively: safe writes, bash with rollback, CTG visualization, belief tracking, and more. |
+| **Claude Code MCP Integration** | ❌ | ❌ | ❌ | ✅ **FastMCP v2 Ready** | Ships a full Model Context Protocol (MCP) server. Connect Ketan-OS to Claude Code in one config line — Claude gets native tools for safe writes, bash with auto-rollback, CTG visualization, belief tracking, and more. |
+
 
 ---
 

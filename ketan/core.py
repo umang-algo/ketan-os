@@ -8,8 +8,6 @@ from ketan.dual_ledger import KetanLedger, Checkpoint
 from ketan.verifier import InvariantVerifier, InvariantResult
 from ketan.causal_graph import KetanTraceGraph, CausalNode, NodeKind, NodeStatus
 from ketan.epistemic import EpistemicBeliefEngine, ContradictionEvent
-from ketan.speculative_kernel import PredictiveSpeculativeKernel
-from ketan.symbolic_kernel import SymbolicInvariantKernel, MicroPatch
 
 logger = logging.getLogger("KetanHarness")
 
@@ -27,8 +25,8 @@ class KetanHarness:
     Ketan-OS Harness (केतन — Beacon of Ground Truth).
 
     Provides sub-second snapshotting, pre-flight assertion verification,
-    Epistemic belief graph tracking, Symbolic Invariant enforcement,
-    Predictive Speculative task execution, and automatic time-travel state rollback.
+    Epistemic belief graph tracking, Causal Trace Graph lineage,
+    and automatic time-travel state rollback.
 
     Thread-safe: protected by internal RLock.
     """
@@ -43,11 +41,7 @@ class KetanHarness:
         self.ledger = KetanLedger()
         self.verifier = InvariantVerifier()
         self.causal_graph = KetanTraceGraph()
-        
-        # Ketan-OS Frontier Subsystems
         self.epistemic_engine = EpistemicBeliefEngine()
-        self.speculative_kernel = PredictiveSpeculativeKernel(workspace_dir, trace_graph=self.causal_graph)
-        self.symbolic_kernel = SymbolicInvariantKernel()
         
         self.max_rollback_attempts = max_rollback_attempts
         self.rollback_counts: Dict[str, int] = {}
@@ -101,13 +95,12 @@ class KetanHarness:
     ) -> Tuple[bool, Any, Optional[str]]:
         """
         Executes a tool within a transactional Ketan-OS boundary:
-        1. Evaluates Symbolic Invariant Rules (sub-millisecond eBPF-style check & micro-patching).
-        2. Runs Pre-flight Invariant Verification.
-        3. If Pre-flight fails: cancels execution, triggers rollback to current_checkpoint.
-        4. Runs tool_fn.
-        5. Inspects observation with Epistemic Belief Engine to detect contradictions.
-        6. Runs Post-flight Invariant Verification.
-        7. If Post-flight fails: triggers rollback to current_checkpoint.
+        1. Runs Pre-flight Invariant Verification.
+        2. If Pre-flight fails: cancels execution, triggers rollback to current_checkpoint.
+        3. Runs tool_fn.
+        4. Inspects observation with Epistemic Belief Engine to detect contradictions.
+        5. Runs Post-flight Invariant Verification.
+        6. If Post-flight fails: triggers rollback to current_checkpoint.
         """
         with self._lock:
             tool_node = self.causal_graph.record_tool_call(
@@ -118,18 +111,7 @@ class KetanHarness:
             )
             self._last_ctg_node = tool_node
 
-            # Step 1: Symbolic Invariant Check & Micro-Patching
-            sym_passed, sym_msg, effective_args, patch = self.symbolic_kernel.evaluate_pre_execution(tool_name, tool_args)
-            if not sym_passed:
-                logger.warning(f"[Ketan-OS] Symbolic Invariant Failed in '{tool_name}': {sym_msg}")
-                self.rollback(current_checkpoint.checkpoint_id, reason=sym_msg, counterfactual_hint=sym_msg)
-                return False, None, sym_msg
-
-            if patch:
-                logger.info(f"[Ketan-OS] Applied Micro-Patch in '{tool_name}': {patch.patch_explanation}")
-                tool_args = effective_args
-
-            # Step 2: Pre-flight Verification
+            # Step 1: Pre-flight Verification
             pre_results = self.verifier.verify_pre_flight(tool_name, tool_args)
             failed_pre = [r for r in pre_results if not r.passed]
 
@@ -156,7 +138,7 @@ class KetanHarness:
                 step=self.current_step, caused_by=tool_node
             )
 
-            # Step 3: Tool Execution
+            # Step 2: Tool Execution
             try:
                 tool_result = tool_fn(tool_args)
                 tool_node.mark_success(result_summary=str(tool_result)[:100] if tool_result else None)
@@ -173,7 +155,7 @@ class KetanHarness:
                 self.rollback(current_checkpoint.checkpoint_id, reason=failure_msg, counterfactual_hint=hint)
                 return False, None, hint
 
-            # Step 4: Epistemic Belief Contradiction Inspection
+            # Step 3: Epistemic Belief Contradiction Inspection
             filepath = str(tool_args.get("filepath") or tool_args.get("path") or "")
             if filepath:
                 contradictions = self.epistemic_engine.inspect_observation(
@@ -185,7 +167,7 @@ class KetanHarness:
                 if contradictions:
                     logger.info(f"[Ketan-OS Epistemic] Contradiction detected in observation for '{filepath}'")
 
-            # Step 5: Post-flight Verification
+            # Step 4: Post-flight Verification
             post_results = self.verifier.verify_post_flight(tool_name, tool_args, tool_result)
             failed_post = [r for r in post_results if not r.passed]
 
@@ -279,9 +261,26 @@ class KetanHarness:
 
             return restored_prompts
 
+    def rollback_to(self, checkpoint_id: str) -> Dict[str, str]:
+        """
+        Public thread-safe wrapper to revert the workspace filesystem state
+        to a specific snapshot or checkpoint ID.
+        """
+        with self._lock:
+            cp = self.ledger.get_checkpoint(checkpoint_id)
+            snapshot_id = cp.fs_snapshot_id if cp else checkpoint_id
+            return self.shadow_fs.rollback_to(snapshot_id)
+
     def cleanup(self):
         """Clean up temporary resources."""
-        self.shadow_fs.cleanup()
+        with self._lock:
+            self.shadow_fs.cleanup()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
 
 
 # Aliases for backward compatibility

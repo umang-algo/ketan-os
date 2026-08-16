@@ -1,11 +1,10 @@
 """
 Empirical Benchmark Suite for Ketan-OS.
 Measures:
-1. Snapshot Creation Latency (50 to 1,000 files)
+1. Snapshot Creation Latency (1,000 files)
 2. Time-Travel Rollback Speed (Sub-millisecond reversion)
 3. Zero-State-Leak Data Integrity (Byte-for-byte SHA256 verification)
-4. JIT Compiler Speedup & Token Savings Ratio
-5. Memory Overhead & LRU Eviction Efficiency
+4. Epistemic Contradiction & Memory Inspection Speed
 """
 
 import os
@@ -19,7 +18,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from ketan import KetanHarness, ShadowFS, DualLedger, JITCompiler, PolicyEngine, Policy
+from ketan import KetanHarness, ShadowFS, DualLedger, EpistemicBeliefEngine
 from examples.langgraph_business_demo.generate_large_db import generate_1000_orders
 
 def get_dir_sha256(dir_path: str) -> str:
@@ -46,7 +45,7 @@ def run_benchmark():
     # -------------------------------------------------------------------------
     # BENCHMARK 1: SNAPSHOT CREATION SPEED (1,000 FILES / 200KB DB)
     # -------------------------------------------------------------------------
-    print("[1/5] Measuring Snapshot Creation Speed on 1,000 Files...")
+    print("[1/4] Measuring Snapshot Creation Speed on 1,000 Files...")
     with tempfile.TemporaryDirectory(prefix="ketan_bench_ws_") as temp_ws:
         db_dir = Path(temp_ws) / "mock_db"
         generate_1000_orders(str(db_dir))
@@ -71,12 +70,12 @@ def run_benchmark():
     # -------------------------------------------------------------------------
     # BENCHMARK 2: TIME-TRAVEL ROLLBACK SPEED
     # -------------------------------------------------------------------------
-    print("[2/5] Measuring Sub-Second Time-Travel Rollback Speed...")
-    with tempfile.TemporaryDirectory(prefix="chronos_bench_rb_") as temp_ws:
+    print("[2/4] Measuring Sub-Second Time-Travel Rollback Speed...")
+    with tempfile.TemporaryDirectory(prefix="ketan_bench_rb_") as temp_ws:
         db_dir = Path(temp_ws) / "mock_db"
         generate_1000_orders(str(db_dir))
 
-        harness = ChronosHarness(temp_ws)
+        harness = KetanHarness(temp_ws)
         cp_clean = harness.create_checkpoint(prompt_stack=[{"role": "user", "content": "Clean state"}])
 
         # Mutate directory (create 50 new files, corrupt 10 existing files)
@@ -99,13 +98,13 @@ def run_benchmark():
     # -------------------------------------------------------------------------
     # BENCHMARK 3: DATA INTEGRITY / ZERO STATE-LEAK GUARANTEE
     # -------------------------------------------------------------------------
-    print("[3/5] Verifying 100% Byte-for-Byte Data Integrity Across 100 Crashes...")
-    with tempfile.TemporaryDirectory(prefix="chronos_bench_integrity_") as temp_ws:
+    print("[3/4] Verifying 100% Byte-for-Byte Data Integrity Across 100 Crashes...")
+    with tempfile.TemporaryDirectory(prefix="ketan_bench_integrity_") as temp_ws:
         db_dir = Path(temp_ws) / "mock_db"
         generate_1000_orders(str(db_dir))
 
         initial_hash = get_dir_sha256(temp_ws)
-        harness = ChronosHarness(temp_ws, max_rollback_attempts=1000)
+        harness = KetanHarness(temp_ws, max_rollback_attempts=1000)
         cp_initial = harness.create_checkpoint(prompt_stack=[{"role": "user", "content": "Initial"}])
 
         state_leaks = 0
@@ -125,24 +124,20 @@ def run_benchmark():
         print(f"  ✓ State Leaks Detected: {state_leaks} / 100 attempts ({'100% DATA INTEGRITY PASSED' if state_leaks == 0 else 'FAILED'})\n")
 
     # -------------------------------------------------------------------------
-    # BENCHMARK 4: JIT COMPILER SPEEDUP & TOKEN SAVINGS RATIO
+    # BENCHMARK 4: EPISTEMIC CONTRADICTION INSPECTION SPEED
     # -------------------------------------------------------------------------
-    print("[4/5] Measuring JIT Compiler Execution Acceleration...")
-    jit = JITCompiler(compile_threshold=3)
+    print("[4/4] Measuring Epistemic Contradiction Engine Performance...")
+    engine = EpistemicBeliefEngine()
+    for i in range(100):
+        engine.assert_belief(subject=f"file:app_{i}.py", predicate="valid_syntax", object_val=True)
 
-    for i in range(3):
-        jit.record_step("write_file", {"path": "app.py", "content": "x=1"}, "success", elapsed_ms=450.0)
-
-    skill = jit.match("write_file", {"path": "app.py", "content": "x=1"})
     t0 = time.time()
-    success, res, jit_elapsed_ms = skill.execute({"path": "app.py", "content": "x=1"})
-    speedup = 450.0 / max(jit_elapsed_ms, 0.01)
+    events = engine.inspect_observation(subject="file:app_50.py", predicate="valid_syntax", observed_val=False)
+    epistemic_ms = (time.time() - t0) * 1000
 
-    results["jit_speedup"] = speedup
-    results["token_savings_percent"] = 100.0
-    print(f"  ✓ Standard Tool Call: ~450.0 ms (LLM Inference + Overhead)")
-    print(f"  ✓ JIT Compiled Skill: {jit_elapsed_ms:.3f} ms (Zero LLM Tokens)")
-    print(f"  ✓ JIT Acceleration Factor: {speedup:.1f}x Speedup | 100% Token Savings\n")
+    results["epistemic_ms"] = epistemic_ms
+    results["contradictions_detected"] = len(events)
+    print(f"  ✓ Epistemic Contradiction Inspection: {epistemic_ms:.3f} ms ({len(events)} contradiction detected)\n")
 
     # -------------------------------------------------------------------------
     # SUMMARY TABLE
@@ -153,8 +148,7 @@ def run_benchmark():
     print(f"  1. Snapshot Latency (1,000 Files / 200KB DB) : {results['avg_snapshot_ms']:.2f} ms")
     print(f"  2. Time-Travel Rollback Latency              : {results['avg_rollback_ms']:.2f} ms")
     print(f"  3. Data Integrity & Zero State Leak Guarantee: {'100% VERIFIED' if results['data_integrity_pass'] else 'FAILED'}")
-    print(f"  4. JIT Execution Acceleration                : {results['jit_speedup']:.1f}x Speedup")
-    print(f"  5. JIT Token Savings Ratio                   : 100% (Zero LLM Inference Tokens)")
+    print(f"  4. Epistemic Contradiction Inspection Speed   : {results['epistemic_ms']:.3f} ms")
     print("=" * 76 + "\n")
 
 if __name__ == "__main__":

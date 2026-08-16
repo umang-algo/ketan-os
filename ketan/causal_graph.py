@@ -12,6 +12,7 @@ This enables surgical root cause identification:
 
 import time
 import json
+import threading
 from enum import Enum
 from typing import Dict, List, Optional, Any, Set, Tuple
 
@@ -122,6 +123,7 @@ class KetanTraceGraph:
 
     A directed acyclic graph (DAG) tracking every action and its causal lineage.
     Enables surgical root-cause analysis instead of blind log scanning.
+    Thread-safe synchronization using RLock.
     """
 
     def __init__(self):
@@ -130,18 +132,22 @@ class KetanTraceGraph:
         self._adjacency_out: Dict[str, List[str]] = {}  # node -> [children]
         self._adjacency_in:  Dict[str, List[str]] = {}  # node -> [parents]
         self._node_counter = 0
+        self._lock = threading.RLock()
 
     def _next_id(self, prefix: str) -> str:
-        self._node_counter += 1
-        return f"{prefix}_{self._node_counter}_{int(time.time() * 1000)}"
+        with self._lock:
+            self._node_counter += 1
+            return f"{prefix}_{self._node_counter}_{int(time.time() * 1000)}"
 
     def _add_node(self, node: CausalNode, caused_by: Optional[CausalNode] = None, relation: str = "caused") -> CausalNode:
-        self.nodes[node.node_id] = node
-        self._adjacency_out.setdefault(node.node_id, [])
-        self._adjacency_in.setdefault(node.node_id, [])
-        if caused_by:
-            self._add_edge(from_node=caused_by, to_node=node, relation=relation)
-        return node
+        with self._lock:
+            self.nodes[node.node_id] = node
+            self._adjacency_out.setdefault(node.node_id, [])
+            self._adjacency_in.setdefault(node.node_id, [])
+            if caused_by:
+                self._add_edge(from_node=caused_by, to_node=node, relation=relation)
+            return node
+
 
     def _add_edge(self, from_node: CausalNode, to_node: CausalNode, relation: str = "caused") -> CausalEdge:
         edge = CausalEdge(from_node.node_id, to_node.node_id, relation)

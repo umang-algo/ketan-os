@@ -3,6 +3,8 @@ import shutil
 import hashlib
 import tempfile
 import time
+import atexit
+import threading
 from pathlib import Path
 from typing import Dict, List, Set, Optional, Tuple
 
@@ -60,7 +62,10 @@ class ShadowSnapshot:
 class KetanShadowFS:
     """
     Sub-second Transactional Shadow Filesystem Overlay for Ketan-OS (केतन).
-    Tracks file tree state and allows instant rollback to any historical snapshot.
+    Tracks file tree state and allows instant rollback to any historical snapshot
+    using content-addressed deduplicated blob storage.
+    
+    Thread-safe and automatically cleans up temporary directories on termination.
     """
     def __init__(self, target_dir: str, ignore_patterns: Optional[List[str]] = None, max_snapshots: int = 50):
         self.target_dir = Path(target_dir).resolve()
@@ -73,7 +78,27 @@ class KetanShadowFS:
         
         self.max_snapshots = max_snapshots
         self.storage_dir = Path(tempfile.mkdtemp(prefix="ketan_shadow_"))
+        self.blob_dir = self.storage_dir / "blobs"
+        self.blob_dir.mkdir(parents=True, exist_ok=True)
+        
         self.snapshots: Dict[str, ShadowSnapshot] = {}
+        self._lock = threading.RLock()
+        self._cleaned = False
+        
+        # Register atexit handler for automatic resource cleanup
+        atexit.register(self.cleanup)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
+
+    def __del__(self):
+        try:
+            self.cleanup()
+        except Exception:
+            pass
 
     def _should_ignore(self, path: Path) -> bool:
         for part in path.parts:
@@ -83,95 +108,121 @@ class KetanShadowFS:
 
     def scan_state(self) -> Dict[str, FileState]:
         """Scans the target directory and returns a map of relative paths to FileStates."""
-        states = {}
-        for root, dirs, files in os.walk(self.target_dir):
-            root_path = Path(root)
-            
-            # Filter directories in-place to avoid traversing ignored folders
-            dirs[:] = [d for d in dirs if not self._should_ignore(root_path / d)]
-            
-            for file_name in files:
-                abs_path = root_path / file_name
-                if self._should_ignore(abs_path):
-                    continue
-                rel_path = str(abs_path.relative_to(self.target_dir))
-                states[rel_path] = FileState(rel_path, abs_path)
+        with self._lock:
+            states = {}
+            for root, dirs, files in os.walk(self.target_dir):
+                root_path = Path(root)
                 
-        return states
+                # Filter directories in-place to avoid traversing ignored folders
+                dirs[:] = [d for d in dirs if not self._should_ignore(root_path / d)]
+                
+                for file_name in files:
+                    abs_path = root_path / file_name
+                    if self._should_ignore(abs_path):
+                        continue
+                    rel_path = str(abs_path.relative_to(self.target_dir))
+                    states[rel_path] = FileState(rel_path, abs_path)
+                    
+            return states
 
     def create_snapshot(self, snapshot_id: str) -> ShadowSnapshot:
-        """Takes a full cryptographic snapshot of the workspace."""
-        current_states = self.scan_state()
-        snap_backup_dir = self.storage_dir / snapshot_id
-        snap_backup_dir.mkdir(parents=True, exist_ok=True)
-        
-        for rel_path, st in current_states.items():
-            if st.exists and not st.is_dir:
-                dest = snap_backup_dir / rel_path
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(st.abs_path, dest)
-                
-        snapshot = ShadowSnapshot(snapshot_id, snap_backup_dir, current_states)
-        self.snapshots[snapshot_id] = snapshot
-        
-        # Enforce LRU eviction if snapshots exceed maximum allowed capacity
-        if len(self.snapshots) > self.max_snapshots:
-            oldest_id = min(self.snapshots.keys(), key=lambda k: self.snapshots[k].created_at)
-            self.delete_snapshot(oldest_id)
+        """
+        Takes an incremental, content-addressed snapshot of the workspace.
+        Only unique file contents (blobs) are stored once.
+        """
+        with self._lock:
+            current_states = self.scan_state()
+            snap_backup_dir = self.storage_dir / snapshot_id
+            snap_backup_dir.mkdir(parents=True, exist_ok=True)
             
-        return snapshot
+            for rel_path, st in current_states.items():
+                if st.exists and not st.is_dir and st.content_hash:
+                    blob_path = self.blob_dir / st.content_hash
+                    if not blob_path.exists():
+                        shutil.copy2(st.abs_path, blob_path)
+                    
+                    # Create symlink or copy to snap_backup_dir for backward compatibility
+                    dest = snap_backup_dir / rel_path
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    if not dest.exists():
+                        try:
+                            os.link(blob_path, dest)
+                        except (OSError, AttributeError):
+                            shutil.copy2(blob_path, dest)
+                    
+            snapshot = ShadowSnapshot(snapshot_id, snap_backup_dir, current_states)
+            self.snapshots[snapshot_id] = snapshot
+            
+            # Enforce LRU eviction if snapshots exceed maximum allowed capacity
+            if len(self.snapshots) > self.max_snapshots:
+                oldest_id = min(self.snapshots.keys(), key=lambda k: self.snapshots[k].created_at)
+                self.delete_snapshot(oldest_id)
+                
+            return snapshot
 
     def rollback_to(self, snapshot_id: str) -> Dict[str, str]:
         """
         Reverts the target workspace back to the exact physical state of snapshot_id.
         Returns a dict summarizing modified, created, and restored files.
         """
-        if snapshot_id not in self.snapshots:
-            raise KeyError(f"Snapshot '{snapshot_id}' not found in KetanShadowFS ledger.")
-            
-        target_snap = self.snapshots[snapshot_id]
-        current_states = self.scan_state()
-        diff = target_snap.get_diff(current_states)
-        
-        # 1. Remove files created after the snapshot was taken
-        for rel_path, status in diff.items():
-            if status == "CREATED":
-                abs_p = self.target_dir / rel_path
-                if abs_p.exists():
-                    if abs_p.is_dir():
-                        shutil.rmtree(abs_p)
-                    else:
-                        abs_p.unlink()
-                        parent = abs_p.parent
-                        while parent != self.target_dir and parent.exists() and not any(parent.iterdir()):
-                            parent.rmdir()
-                            parent = parent.parent
-
-        # 2. Restore modified or deleted files from backup
-        for rel_path, status in diff.items():
-            if status in ("MODIFIED", "DELETED"):
-                backup_file = target_snap.backup_dir / rel_path
-                target_file = self.target_dir / rel_path
+        with self._lock:
+            if snapshot_id not in self.snapshots:
+                raise KeyError(f"Snapshot '{snapshot_id}' not found in KetanShadowFS ledger.")
                 
-                if backup_file.exists():
-                    target_file.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(backup_file, target_file)
-                elif target_file.exists():
-                    target_file.unlink()
+            target_snap = self.snapshots[snapshot_id]
+            current_states = self.scan_state()
+            diff = target_snap.get_diff(current_states)
+            
+            # 1. Remove files created after the snapshot was taken
+            for rel_path, status in diff.items():
+                if status == "CREATED":
+                    abs_p = self.target_dir / rel_path
+                    if abs_p.exists():
+                        if abs_p.is_dir():
+                            shutil.rmtree(abs_p)
+                        else:
+                            abs_p.unlink()
+                            parent = abs_p.parent
+                            while parent != self.target_dir and parent.exists() and not any(parent.iterdir()):
+                                parent.rmdir()
+                                parent = parent.parent
 
-        return diff
+            # 2. Restore modified or deleted files from blob store or backup dir
+            for rel_path, status in diff.items():
+                if status in ("MODIFIED", "DELETED"):
+                    target_file = self.target_dir / rel_path
+                    old_st = target_snap.file_states.get(rel_path)
+                    
+                    if old_st and old_st.content_hash:
+                        blob_path = self.blob_dir / old_st.content_hash
+                        backup_file = target_snap.backup_dir / rel_path
+                        source_file = blob_path if blob_path.exists() else backup_file
+                        
+                        if source_file.exists():
+                            target_file.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(source_file, target_file)
+                        elif target_file.exists():
+                            target_file.unlink()
+                    elif target_file.exists():
+                        target_file.unlink()
+
+            return diff
 
     def delete_snapshot(self, snapshot_id: str):
-        """Purges snapshot from disk and memory."""
-        if snapshot_id in self.snapshots:
-            snap = self.snapshots.pop(snapshot_id)
-            if snap.backup_dir.exists():
-                shutil.rmtree(snap.backup_dir, ignore_errors=True)
+        """Purges snapshot metadata and backup directory from disk."""
+        with self._lock:
+            if snapshot_id in self.snapshots:
+                snap = self.snapshots.pop(snapshot_id)
+                if snap.backup_dir.exists():
+                    shutil.rmtree(snap.backup_dir, ignore_errors=True)
 
     def cleanup(self):
-        """Destroys the shadow storage overlay."""
-        if self.storage_dir.exists():
-            shutil.rmtree(self.storage_dir, ignore_errors=True)
+        """Destroys the shadow storage overlay and temp directory."""
+        with self._lock:
+            if not self._cleaned:
+                self._cleaned = True
+                if self.storage_dir.exists():
+                    shutil.rmtree(self.storage_dir, ignore_errors=True)
 
 
 # Alias for backward compatibility

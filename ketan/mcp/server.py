@@ -34,6 +34,7 @@ import os
 import json
 import logging
 import argparse
+import atexit
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -50,22 +51,25 @@ log = logging.getLogger("ketan-mcp")
 
 # Add project root to path for local development
 _HERE = Path(__file__).parent
-_ROOT = _HERE.parent.parent.parent
+_ROOT = _HERE.parent.parent
 if (_ROOT / "ketan").exists():
     sys.path.insert(0, str(_ROOT))
 
+# Robust dual-compatibility for mcp 1.x (FastMCP) and mcp 2.x (MCPServer)
 try:
-    from mcp.server.mcpserver import MCPServer
+    from mcp.server.fastmcp import FastMCP
 except ImportError:
-    log.error(
-        "MCP SDK not installed. Run: uv add mcp\n"
-        "Or: pip install mcp"
-    )
-    sys.exit(1)
+    try:
+        from mcp.server.mcpserver import MCPServer as FastMCP
+    except ImportError:
+        log.error(
+            "MCP SDK not installed. Run: uv add mcp\n"
+            "Or: pip install mcp"
+        )
+        sys.exit(1)
 
 from ketan import (
     KetanHarness,
-    PolicyEngine,
     KetanAgentWrapper,
     EpistemicBeliefEngine,
 )
@@ -76,8 +80,21 @@ from ketan import (
 # ---------------------------------------------------------------------------
 
 _harness: Optional[KetanHarness] = None
-_policy_engine: Optional[PolicyEngine] = None
 _prompt_stack = [{"role": "system", "content": "Ketan-OS MCP session started."}]
+
+
+
+def _cleanup_global_harness():
+    global _harness
+    if _harness is not None:
+        try:
+            _harness.cleanup()
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup_global_harness)
+
 
 def _get_harness() -> KetanHarness:
     global _harness
@@ -90,30 +107,42 @@ def _get_harness() -> KetanHarness:
 
 
 # ---------------------------------------------------------------------------
-# MCP Server (v2 API)
+# MCP Server Instantiation (Compatible with v1 and v2 SDKs)
 # ---------------------------------------------------------------------------
 
-server = MCPServer(
-    name="ketan-os",
-    title="Ketan-OS 🪔",
-    description="Transactional Intelligence Substrate for Claude Code — atomic rollback, pre-flight guards, causal tracing.",
-    instructions=(
-        "You are now connected to Ketan-OS 🪔 (केतन — Beacon of Ground Truth). "
-        "IMPORTANT: Before making file writes or shell commands that mutate state, "
-        "call ketan_snapshot to capture a safe restore point, OR use "
-        "ketan_write_file_safe and ketan_run_bash_safe which include automatic "
-        "snapshotting and rollback on failure. "
-        "Call ketan_get_status anytime to inspect the current ground-truth state."
-    ),
-    version="2.0.0",
+_instructions = (
+    "You are now connected to Ketan-OS 🪔 (केतन — Beacon of Ground Truth). "
+    "IMPORTANT: Before making file writes or shell commands that mutate state, "
+    "call ketan_snapshot to capture a safe restore point, OR use "
+    "ketan_write_file_safe and ketan_run_bash_safe which include automatic "
+    "snapshotting and rollback on failure. "
+    "Call ketan_get_status anytime to inspect the current ground-truth state."
 )
+
+try:
+    mcp = FastMCP(
+        name="ketan-os",
+        title="Ketan-OS 🪔",
+        description="Transactional Intelligence Substrate for Claude Code — atomic rollback, pre-flight guards, causal tracing.",
+        instructions=_instructions,
+    )
+except TypeError:
+    try:
+        mcp = FastMCP(
+            "ketan-os",
+            instructions=_instructions,
+        )
+    except Exception:
+        mcp = FastMCP("ketan-os")
+
+server = mcp  # Alias for backward compatibility
 
 
 # ---------------------------------------------------------------------------
 # Tool: Initialize Workspace
 # ---------------------------------------------------------------------------
 
-@server.tool()
+@mcp.tool()
 def ketan_init_workspace(workspace_path: str) -> str:
     """
     Initialize Ketan-OS for a workspace directory.
@@ -124,13 +153,16 @@ def ketan_init_workspace(workspace_path: str) -> str:
     Args:
         workspace_path: Absolute path to the project/workspace directory to protect.
     """
-    global _harness, _policy_engine, _prompt_stack
+    global _harness, _prompt_stack
     ws = Path(workspace_path).resolve()
     ws.mkdir(parents=True, exist_ok=True)
 
+    if _harness is not None:
+        _harness.cleanup()
+
     _harness = KetanHarness(str(ws))
-    _policy_engine = PolicyEngine()
     _prompt_stack = [{"role": "system", "content": f"Ketan-OS protecting workspace: {ws}"}]
+
 
     log.info(f"Ketan-OS initialized for workspace: {ws}")
     return (
@@ -147,7 +179,7 @@ def ketan_init_workspace(workspace_path: str) -> str:
 # Tool: Get Status
 # ---------------------------------------------------------------------------
 
-@server.tool()
+@mcp.tool()
 def ketan_get_status() -> str:
     """
     Get the current Ketan-OS ground-truth state report.
@@ -173,7 +205,7 @@ def ketan_get_status() -> str:
 # Tool: Snapshot
 # ---------------------------------------------------------------------------
 
-@server.tool()
+@mcp.tool()
 def ketan_snapshot() -> str:
     """
     Take an atomic filesystem snapshot of the entire workspace.
@@ -197,7 +229,7 @@ def ketan_snapshot() -> str:
 # Tool: Rollback
 # ---------------------------------------------------------------------------
 
-@server.tool()
+@mcp.tool()
 def ketan_rollback(checkpoint_id: str) -> str:
     """
     Time-travel rollback the workspace to a previous checkpoint.
@@ -216,7 +248,7 @@ def ketan_rollback(checkpoint_id: str) -> str:
             f"Available recent checkpoints: {available}"
         )
     try:
-        h.shadow_fs.rollback_to(cp.fs_snapshot_id)
+        h.rollback_to(checkpoint_id)
         return (
             f"✅ Rolled back to checkpoint '{checkpoint_id}' (step {cp.step_number}).\n"
             f"🕰️  Workspace restored to exact state at that point in time."
@@ -229,7 +261,7 @@ def ketan_rollback(checkpoint_id: str) -> str:
 # Tool: List Checkpoints
 # ---------------------------------------------------------------------------
 
-@server.tool()
+@mcp.tool()
 def ketan_get_checkpoints() -> str:
     """
     List all available checkpoints in the Ketan dual-ledger (newest first).
@@ -252,7 +284,7 @@ def ketan_get_checkpoints() -> str:
 # Tool: Safe File Write
 # ---------------------------------------------------------------------------
 
-@server.tool()
+@mcp.tool()
 def ketan_write_file_safe(filepath: str, content: str) -> str:
     """
     Write a file to the workspace with FULL Ketan-OS protection:
@@ -300,7 +332,7 @@ def ketan_write_file_safe(filepath: str, content: str) -> str:
             f"💡 Rollback: ketan_rollback('{cp.checkpoint_id}')"
         )
     except Exception as e:
-        h.shadow_fs.rollback_to(cp.fs_snapshot_id)
+        h.rollback_to(cp.checkpoint_id)
         return f"❌ Write failed — workspace auto-rolled back.\nError: {e}"
 
 
@@ -308,11 +340,11 @@ def ketan_write_file_safe(filepath: str, content: str) -> str:
 # Tool: Safe Bash Execution
 # ---------------------------------------------------------------------------
 
-@server.tool()
+@mcp.tool()
 def ketan_run_bash_safe(command: str, timeout_seconds: int = 30) -> str:
     """
     Execute a shell command with FULL Ketan-OS protection:
-      1. Pre-flight dangerous command guard (blocks rm -rf /, fork bombs, etc.).
+      1. Pre-flight dangerous command guard (blocks rm -rf /, fork bombs, disk wipes, etc.).
       2. Atomic snapshot before execution.
       3. Run the command in the workspace directory.
       4. On non-zero exit or exception → automatic rollback to pre-command state.
@@ -352,12 +384,12 @@ def ketan_run_bash_safe(command: str, timeout_seconds: int = 30) -> str:
         exit_code = result.returncode
 
         if exit_code != 0:
-            h.causal_graph.add_failure_node(
-                step_number=h.current_step,
-                label=f"Bash command failed (exit {exit_code}): {command}",
-                error_message=stderr or stdout or f"Command exited with code {exit_code}",
+            h.causal_graph.record_failure(
+                reason=stderr or stdout or f"Command exited with code {exit_code}",
+                step=h.current_step,
+                hint=f"Bash command failed (exit {exit_code}): {command}",
             )
-            h.shadow_fs.rollback_to(cp.fs_snapshot_id)
+            h.rollback_to(cp.checkpoint_id)
             return (
                 f"❌ Command failed (exit {exit_code}) — workspace auto-rolled back.\n"
                 f"Command: {command}\n"
@@ -376,13 +408,13 @@ def ketan_run_bash_safe(command: str, timeout_seconds: int = 30) -> str:
         )
 
     except subprocess.TimeoutExpired:
-        h.shadow_fs.rollback_to(cp.fs_snapshot_id)
+        h.rollback_to(cp.checkpoint_id)
         return (
             f"❌ Command timed out after {timeout_seconds}s — workspace auto-rolled back.\n"
             f"Command: {command}"
         )
     except Exception as e:
-        h.shadow_fs.rollback_to(cp.fs_snapshot_id)
+        h.rollback_to(cp.checkpoint_id)
         return f"❌ Command crashed — workspace auto-rolled back.\nError: {e}"
 
 
@@ -390,7 +422,7 @@ def ketan_run_bash_safe(command: str, timeout_seconds: int = 30) -> str:
 # Tool: Check Invariant (Dry Run)
 # ---------------------------------------------------------------------------
 
-@server.tool()
+@mcp.tool()
 def ketan_check_invariant(tool_name: str, tool_args_json: str) -> str:
     """
     Run a pre-flight invariant check WITHOUT executing anything.
@@ -425,7 +457,7 @@ def ketan_check_invariant(tool_name: str, tool_args_json: str) -> str:
 # Tool: Get CTG
 # ---------------------------------------------------------------------------
 
-@server.tool()
+@mcp.tool()
 def ketan_get_ctg() -> str:
     """
     Get the Causal Trace Graph (CTG) as a Mermaid diagram.
@@ -444,7 +476,7 @@ def ketan_get_ctg() -> str:
 # Tool: Explain Failure
 # ---------------------------------------------------------------------------
 
-@server.tool()
+@mcp.tool()
 def ketan_explain_failure() -> str:
     """
     Get a root-cause explanation of the most recent failure in the CTG.
@@ -464,7 +496,7 @@ def ketan_explain_failure() -> str:
 # Tool: Observe Belief
 # ---------------------------------------------------------------------------
 
-@server.tool()
+@mcp.tool()
 def ketan_observe_belief(subject: str, predicate: str, value: str, confidence: float = 1.0) -> str:
     """
     Record a factual observation into the Epistemic Belief Engine.
@@ -499,7 +531,7 @@ def ketan_observe_belief(subject: str, predicate: str, value: str, confidence: f
 # Tool: List Beliefs
 # ---------------------------------------------------------------------------
 
-@server.tool()
+@mcp.tool()
 def ketan_list_beliefs() -> str:
     """
     List all active beliefs tracked by the Epistemic Belief Engine.
@@ -523,7 +555,7 @@ def ketan_list_beliefs() -> str:
 # Tool: Read File
 # ---------------------------------------------------------------------------
 
-@server.tool()
+@mcp.tool()
 def ketan_read_file(filepath: str) -> str:
     """
     Read a file from the workspace. Also records its existence as a belief.
@@ -549,7 +581,7 @@ def ketan_read_file(filepath: str) -> str:
 # Tool: List Files
 # ---------------------------------------------------------------------------
 
-@server.tool()
+@mcp.tool()
 def ketan_list_files(subdirectory: str = "") -> str:
     """
     List all files in the workspace (or a subdirectory of it).
@@ -577,7 +609,7 @@ def ketan_list_files(subdirectory: str = "") -> str:
 # Tool: Session Summary
 # ---------------------------------------------------------------------------
 
-@server.tool()
+@mcp.tool()
 def ketan_session_summary() -> str:
     """
     Get a complete markdown summary of the Ketan-OS session:
@@ -637,12 +669,19 @@ def main():
     log.info(f"Starting Ketan-OS MCP Server | workspace: {ws_path}")
 
     ws_path.mkdir(parents=True, exist_ok=True)
-    global _harness, _policy_engine
+    global _harness
+    if _harness is not None:
+        _harness.cleanup()
     _harness = KetanHarness(str(ws_path))
-    _policy_engine = PolicyEngine()
     log.info("Ketan-OS harness ready. Listening on stdio for MCP connections.")
 
-    asyncio.run(server.run_stdio_async())
+
+    if hasattr(mcp, "run"):
+        mcp.run(transport="stdio")
+    elif hasattr(mcp, "run_stdio_async"):
+        asyncio.run(mcp.run_stdio_async())
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":
